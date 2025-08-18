@@ -62,8 +62,8 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
         if c0 == "Class Totals:" and current_center and current_class:
             row = vf_df_raw.iloc[i]
-            funded = pd.to_numeric(row.iloc[4], errors="coerce")  # Number of Federal Slots Available
-            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # Number of Children Enrolled
+            funded = pd.to_numeric(row.iloc[4], errors="coerce")  # Federal Slots Available
+            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # Children Enrolled
             center_clean = re.sub(r"^HCHSP --\s*", "", current_center)
             records.append({
                 "Center": center_clean,
@@ -200,9 +200,21 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
                 n = n // 26 - 1
             return s
         pct_letter = colnum_string(pct_idx)
-        ws.conditional_format(f"{pct_letter}5:{pct_letter}{last_row+1}", {
-            "type": "cell", "criteria": "<", "value": 100,
+        pct_range = f"{pct_letter}5:{pct_letter}{last_row+1}"
+
+        ws.conditional_format(pct_range, {
+            "type": "cell",
+            "criteria": "<",
+            "value": 100,
             "format": wb.add_format({"font_color": "red"})
+        })
+
+        # NEW: blue for > 100
+        ws.conditional_format(pct_range, {
+            "type": "cell",
+            "criteria": ">",
+            "value": 100,
+            "format": wb.add_format({"font_color": "blue"})
         })
 
         # Bold total rows
