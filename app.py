@@ -1,35 +1,36 @@
-import streamlit as st
+import io
+import re  # <-- required for re.match / re.sub
+from pathlib import Path
+import numpy as np
 import pandas as pd
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill
-from openpyxl.utils import get_column_letter
-from PIL import Image
-from datetime import datetime, date
+import streamlit as st
 
-st.set_page_config(page_title="HCHSP Enrollment Report Formatter", layout="wide")
+st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
 
-logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
-st.image(logo, width=300)
+# ---- Header: logo on the app only (no uploader, not used in Excel) ----
+logo_path = Path("header_logo.png")
+if logo_path.exists():
+    st.image(str(logo_path), width=300)
 
-st.set_page_config(page_title="Enrollment Formatter", layout="centered")
-
-st.title("HCHSP Enrollment Report Formatter (2025–2026)")
+st.title("Hidalgo County Head Start — Enrollment Formatter")
+st.caption(
+    "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
+    "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
+    "and red highlighting for percentages under 100."
+)
 
 st.divider()
 
 # ---- Inputs ----
 vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
-aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="10")
+aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
 
 # ----------------------------
 # Utilities
 # ----------------------------
 
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Parse VF report (header=None) into per-class rows:
-    Center | Class | Funded | Enrolled
-    """
+    """Parse VF report (header=None) into per-class rows: Center | Class | Funded | Enrolled"""
     records = []
     current_center = None
     current_class = None
@@ -43,8 +44,8 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
         if c0 == "Class Totals:" and current_center and current_class:
             row = vf_df_raw.iloc[i]
-            funded = pd.to_numeric(row.iloc[4], errors="coerce")  # Number of Federal Slots Available
-            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # Number of Children Enrolled
+            funded = pd.to_numeric(row.iloc[4], errors="coerce")
+            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
             center_clean = re.sub(r"^HCHSP --\s*", "", current_center)
             records.append({
                 "Center": center_clean,
@@ -60,10 +61,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Parse Applied/Accepted report (header=None) to per-center counts.
-    Excludes rows with a Status End Date.
-    """
+    """Parse Applied/Accepted (header=None) to per-center counts, excluding rows with a Status End Date."""
     header_row_idx = aa_df_raw.index[aa_df_raw.iloc[:, 0].astype(str).str.startswith("ST: Participant PID", na=False)]
     if len(header_row_idx) == 0:
         raise ValueError("Could not find header row in Applied/Accepted report (expected a row starting with 'ST: Participant PID').")
@@ -87,11 +85,7 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
-    """
-    Merge per-class VF with center-level counts; add center totals and agency total.
-    Class rows: blank Applied/Accepted. Totals: include Applied/Accepted.
-    % column is numeric whole number (e.g., 87).
-    """
+    """Merge class rows with center counts; add Center Totals and Agency Total; blank Applied/Accepted on class rows."""
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
     merged["% Enrolled of Funded"] = np.where(
         merged["Funded"] > 0,
@@ -110,8 +104,8 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
                 "Class": r["Class"],
                 "Funded": int(r["Funded"]),
                 "Enrolled": int(r["Enrolled"]),
-                "Applied": "",    # blank on class rows
-                "Accepted": "",   # blank on class rows
+                "Applied": "",
+                "Accepted": "",
                 "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
             })
         funded_sum = int(group["Funded"].sum())
@@ -130,40 +124,28 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # Agency totals computed from center totals
+    # Agency totals from center totals
     agency_funded = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(applied_by_center.sum())
     agency_accepted = int(accepted_by_center.sum())
     agency_pct = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
 
-    final = pd.concat([
-        final,
-        pd.DataFrame([{
-            "Center": "Agency Total",
-            "Class": "",
-            "Funded": agency_funded,
-            "Enrolled": agency_enrolled,
-            "Applied": agency_applied,
-            "Accepted": agency_accepted,
-            "% Enrolled of Funded": agency_pct
-        }])
-    ], ignore_index=True)
+    final = pd.concat([final, pd.DataFrame([{
+        "Center": "Agency Total",
+        "Class": "",
+        "Funded": agency_funded,
+        "Enrolled": agency_enrolled,
+        "Applied": agency_applied,
+        "Accepted": agency_accepted,
+        "% Enrolled of Funded": agency_pct
+    }])], ignore_index=True)
 
-    final = final[["Center","Class","Funded","Enrolled","Applied","Accepted","% Enrolled of Funded"]]
-    return final
+    return final[["Center","Class","Funded","Enrolled","Applied","Accepted","% Enrolled of Funded"]]
 
 
-def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
-    """
-    Create the Excel with:
-    - Title + subtitle
-    - Optional logo (top-right)
-    - Bold headers + filters + freeze panes
-    - % column numeric with % display
-    - Red font for % < 100
-    - Bold rows for center totals and agency total
-    """
+def to_styled_excel(df: pd.DataFrame) -> bytes:
+    """Write styled Excel (no logo embedded)."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Formatted", startrow=3)
@@ -175,18 +157,6 @@ def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
         subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, "2025-2026 Campus Classroom Enrollment", subtitle_fmt)
-
-        # Optional logo (top-right corner, first row)
-        if logo_bytes is not None:
-            # place it near the top-right corner above the table
-            end_col = len(df.columns) - 1
-            # Insert in row 0, last column cell with some scaling if needed
-            image_opts = {"x_scale": 0.6, "y_scale": 0.6, "x_offset": 10, "y_offset": 2}
-            try:
-                ws.insert_image(0, end_col, "logo.png", {"image_data": io.BytesIO(logo_bytes), **image_opts})
-            except Exception:
-                # if insert fails, ignore logo rather than failing the whole export
-                pass
 
         # Bold headers
         header_fmt = wb.add_format({"bold": True})
@@ -200,9 +170,9 @@ def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
         ws.freeze_panes(4, 0)
 
         # % column numeric with percent sign
-        percent_col_idx = df.columns.get_loc("% Enrolled of Funded")
-        percent_fmt = wb.add_format({"num_format": '0"%"'})
-        ws.set_column(percent_col_idx, percent_col_idx, 16, percent_fmt)
+        pct_idx = df.columns.get_loc("% Enrolled of Funded")
+        pct_fmt = wb.add_format({'num_format': '0"%"'})
+        ws.set_column(pct_idx, pct_idx, 16, pct_fmt)
 
         # Conditional red for % < 100
         def colnum_string(n: int) -> str:
@@ -211,16 +181,13 @@ def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
                 s = chr(n % 26 + 65) + s
                 n = n // 26 - 1
             return s
-        percent_letter = colnum_string(percent_col_idx)
-        percent_range = f"{percent_letter}5:{percent_letter}{last_row+1}"
-        ws.conditional_format(percent_range, {
-            "type": "cell",
-            "criteria": "<",
-            "value": 100,
+        pct_letter = colnum_string(pct_idx)
+        ws.conditional_format(f"{pct_letter}5:{pct_letter}{last_row+1}", {
+            "type": "cell", "criteria": "<", "value": 100,
             "format": wb.add_format({"font_color": "red"})
         })
 
-        # Bold totals (center rows ending with " Total" or Agency Total)
+        # Bold total rows
         bold_fmt = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if (isinstance(val, str) and val.endswith(" Total")) or (val == "Agency Total"):
@@ -244,9 +211,8 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.success("Preview below. Use the download button to get the Excel file.")
         st.dataframe(final_df, use_container_width=True)
 
-        # Pass logo bytes if provided
-        logo_bytes = logo_file.read() if logo_file is not None else None
-        xlsx_bytes = to_styled_excel(final_df, logo_bytes)
+        # Export WITHOUT logo
+        xlsx_bytes = to_styled_excel(final_df)
 
         st.download_button(
             "Download Formatted Excel",
