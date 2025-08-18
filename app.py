@@ -11,7 +11,7 @@ st.image(logo, width=300)
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
-st.title("HCHSP Enrollment Checklist Formatter (2025–2026)")
+st.title("HCHSP Enrollment Report (2025–2026)")
 
 # ---- Inputs ----
 vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
