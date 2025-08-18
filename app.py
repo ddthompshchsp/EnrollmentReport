@@ -20,8 +20,8 @@ with hdr_c:
     )
     st.markdown(
         "<p style='text-align:center; font-size:16px; margin-top:0;'>"
-        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
-        </p>,
+        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. 
+        </p>",
         unsafe_allow_html=True,
     )
 
