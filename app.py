@@ -1,5 +1,5 @@
 import io
-import re  # <-- required for re.match / re.sub
+import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -7,23 +7,41 @@ import streamlit as st
 
 st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
 
-# ---- Header: logo on the app only (no uploader, not used in Excel) ----
+# =========================
+# Centered header (logo + title)
+# =========================
 logo_path = Path("header_logo.png")
-if logo_path.exists():
-    st.image(str(logo_path), width=300)
-
-st.title("Hidalgo County Head Start — Enrollment Formatter")
-st.caption(
-    "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
-    "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
-    "and red highlighting for percentages under 100."
-)
+hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
+with hdr_c:
+    if logo_path.exists():
+        st.image(str(logo_path), width=320)
+    st.markdown(
+        "<h1 style='text-align:center; margin: 8px 0 4px;'>Hidalgo County Head Start — Enrollment Formatter</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='text-align:center; font-size:16px; margin-top:0;'>"
+        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
+        "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
+        "and red highlighting for percentages under 100."
+        "</p>",
+        unsafe_allow_html=True,
+    )
 
 st.divider()
 
-# ---- Inputs ----
-vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
-aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
+# =========================
+# Centered inputs
+# =========================
+vf_file = None
+aa_file = None
+process = False
+
+inp_l, inp_c, inp_r = st.columns([1, 2, 1])
+with inp_c:
+    vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
+    aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
+    process = st.button("Process & Download")
 
 # ----------------------------
 # Utilities
@@ -44,8 +62,8 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
         if c0 == "Class Totals:" and current_center and current_class:
             row = vf_df_raw.iloc[i]
-            funded = pd.to_numeric(row.iloc[4], errors="coerce")
-            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
+            funded = pd.to_numeric(row.iloc[4], errors="coerce")  # Number of Federal Slots Available
+            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # Number of Children Enrolled
             center_clean = re.sub(r"^HCHSP --\s*", "", current_center)
             records.append({
                 "Center": center_clean,
@@ -61,7 +79,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
-    """Parse Applied/Accepted (header=None) to per-center counts, excluding rows with a Status End Date."""
+    """Parse Applied/Accepted (header=None) to per-center counts; exclude rows with a Status End Date."""
     header_row_idx = aa_df_raw.index[aa_df_raw.iloc[:, 0].astype(str).str.startswith("ST: Participant PID", na=False)]
     if len(header_row_idx) == 0:
         raise ValueError("Could not find header row in Applied/Accepted report (expected a row starting with 'ST: Participant PID').")
@@ -199,7 +217,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
 # ----------------------------
 # Main
 # ----------------------------
-if st.button("Process & Download") and vf_file and aa_file:
+if process and vf_file and aa_file:
     try:
         vf_raw = pd.read_excel(vf_file, sheet_name=0, header=None)
         aa_raw = pd.read_excel(aa_file, sheet_name=0, header=None)
