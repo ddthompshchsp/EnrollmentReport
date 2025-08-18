@@ -10,7 +10,7 @@ st.set_page_config(page_title="HCHSP Enrollment Report Formatter (2025–2026)",
 
 # ---- App Header (logo only in the UI; not embedded in Excel) ----
 try:
-    logo = Image.open("header_logo.png")  # optional; doesn't affect Excel
+    logo = Image.open("header_logo.png")  # optional; safe to remove if no logo
     st.image(logo, width=300)
 except Exception:
     pass
@@ -19,108 +19,48 @@ st.title("HCHSP Enrollment Report Formatter (2025–2026)")
 st.divider()
 
 # ---- Inputs ----
-left, right = st.columns(2)
-with left:
-    vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
-with right:
-    aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
-
-st.markdown("—")
-
-# Optional parser settings (to handle export variations)
-with st.expander("Advanced parser settings (only if needed)"):
-    totals_label_input = st.text_input(
-        "Totals label to look for in column A",
-        value="Class Totals",  # case/spacing/punctuation flexible
-        help="If your VF shows something like 'Class Total' or 'Totals for Class', put it here."
-    )
-    col_enrolled = st.number_input(
-        "Column index for 'Number of Children Enrolled' (0-based)", min_value=0, max_value=50, value=3, step=1
-    )
-    col_funded = st.number_input(
-        "Column index for 'Number of Federal Slots Available' (0-based)", min_value=0, max_value=50, value=4, step=1
-    )
-    col_waitlist = st.number_input(
-        "Column index for 'Waitlist' (0-based, from VF)", min_value=0, max_value=50, value=5, step=1
-    )
-    col_lacking = st.number_input(
-        "Column index for 'Lacking' (0-based, from VF)", min_value=0, max_value=50, value=6, step=1
-    )
+vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
+aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
 
 # ----------------------------
 # Utilities
 # ----------------------------
-def _norm(s: str) -> str:
-    """Normalize strings to match labels robustly."""
-    s = re.sub(r"[\s]+", " ", str(s or "")).strip().lower()
-    s = re.sub(r"[:\-–—]+$", "", s)
-    return s
-
-def _looks_like_totals(cell_val: str, target: str) -> bool:
-    """Flexible match: 'Class Totals', 'Class Total', spacing/case/punct variations."""
-    a = _norm(cell_val)
-    b = _norm(target)
-    candidates = {b, b.rstrip("s"), f"{b} total", f"{b} totals"}
-    words = [w for w in re.split(r"\s+", b) if w]
-    ordered = all(w in a for w in words)
-    return a in candidates or ordered
-
-def _safe_num(row, idx):
-    """Safely pull numeric from a row by index."""
-    try:
-        val = row.iloc[int(idx)]
-    except Exception:
-        val = pd.NA
-    return pd.to_numeric(val, errors="coerce")
-
-def parse_vf(vf_df_raw: pd.DataFrame, totals_label: str, idx_enrolled: int, idx_funded: int, idx_waitlist: int, idx_lacking: int) -> pd.DataFrame:
+def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Parse VF report (header=None) into per-class rows:
-    Center | Class | Funded | Enrolled | Waitlist | Lacking
-    Robust to label/case/punctuation differences.
+    Center | Class | Funded | Enrolled
     """
     records = []
     current_center = None
     current_class = None
 
-    first_col = vf_df_raw.iloc[:, 0].tolist()
-
     for i in range(len(vf_df_raw)):
         c0 = vf_df_raw.iloc[i, 0]
-
         # Center marker
         if isinstance(c0, str) and c0.strip().startswith("HCHSP --"):
             current_center = c0.strip()
-
-        # Class marker: "Class 1", "Class 2A", etc.
+        # Class marker
         elif isinstance(c0, str) and re.match(r"^\s*Class\s+\w+", c0, flags=re.I):
             current_class = re.sub(r"^\s*Class\s+", "", c0, flags=re.I).strip()
 
-        # Totals row for the current class
-        if _looks_like_totals(c0, totals_label) and current_center and current_class:
+        # Totals row
+        if isinstance(c0, str) and c0.strip().lower().startswith("class total") and current_center and current_class:
             row = vf_df_raw.iloc[i]
-            funded   = _safe_num(row, idx_funded)
-            enrolled = _safe_num(row, idx_enrolled)
-            waitlist = _safe_num(row, idx_waitlist)
-            lacking  = _safe_num(row, idx_lacking)
-
+            funded   = pd.to_numeric(row.iloc[4], errors="coerce")  # adjust if needed
+            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # adjust if needed
             center_clean = re.sub(r"^HCHSP --\s*", "", current_center).strip()
             records.append({
                 "Center": center_clean,
                 "Class": f"Class {current_class}",
-                "Funded": 0 if pd.isna(funded) else float(funded),
-                "Enrolled": 0 if pd.isna(enrolled) else float(enrolled),
-                "Waitlist": int(waitlist) if pd.notna(waitlist) else 0,
-                "Lacking": int(lacking) if pd.notna(lacking) else 0,
+                "Funded": 0 if pd.isna(funded) else int(funded),
+                "Enrolled": 0 if pd.isna(enrolled) else int(enrolled),
             })
 
     tidy = pd.DataFrame(records)
     if tidy.empty:
-        sample = pd.DataFrame({"First Column (sample)": [str(x) for x in first_col[:40]]})
-        st.warning("I couldn’t find any totals rows using the current matcher. Showing the first ~40 labels from column A below to help you adjust the settings.")
-        st.dataframe(sample, use_container_width=True)
-        raise ValueError("Could not find any class totals rows. Adjust the 'Totals label' or column indices in Advanced settings.")
+        raise ValueError("Could not find any class totals rows in the VF file. Check the file format.")
     return tidy
+
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
@@ -149,43 +89,42 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     counts = counts[["Accepted", "Applied"]].astype(int).reset_index().rename(columns={center_col: "Center"})
     return counts
 
-def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
-    """
-    Merge per-class VF with center-level counts; add center totals and agency total.
-    Class rows: Applied/Accepted blank; VF-derived Waitlist/Lacking shown.
-    Totals: include Applied/Accepted + summed VF metrics.
-    """
-    merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
-    merged["% Enrolled of Funded"] = np.where(
-        merged["Funded"] > 0,
-        (merged["Enrolled"] / merged["Funded"] * 100).round(0).astype("Int64"),
-        pd.NA
-    )
 
-    applied_by_center  = merged.groupby("Center")["Applied"].max()
-    accepted_by_center = merged.groupby("Center")["Accepted"].max()
+def calc_waitlist_lacking(funded: int, enrolled: int) -> tuple[int, int]:
+    """Return (waitlist, lacking) based on Funded vs Enrolled."""
+    if enrolled > funded:
+        return enrolled - funded, 0
+    elif funded > enrolled:
+        return 0, funded - enrolled
+    else:
+        return 0, 0
+
+
+def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
+    merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
 
     rows = []
     for center, group in merged.groupby("Center", sort=True):
-        # ---- Class rows (Applied/Accepted blank; show VF Waitlist/Lacking) ----
+        # ---- Class rows ----
         for _, r in group.iterrows():
+            waitlist, lacking = calc_waitlist_lacking(int(r["Funded"]), int(r["Enrolled"]))
+            pct = int(round(r["Enrolled"] / r["Funded"] * 100, 0)) if r["Funded"] > 0 else pd.NA
             rows.append({
                 "Center": r["Center"],
-                "Class": r["Class"],
+                "Class": r["Class"],   # keep class names
                 "Funded": int(r["Funded"]),
                 "Enrolled": int(r["Enrolled"]),
-                "Applied": "",                 # blank on class rows
-                "Accepted": "",                # blank on class rows
-                "Waitlist": int(r["Waitlist"]),
-                "Lacking": int(r["Lacking"]),
-                "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA,
+                "Applied": "",
+                "Accepted": "",
+                "Waitlist": waitlist,
+                "Lacking": lacking,
+                "% Enrolled of Funded": pct
             })
 
-        # ---- Center Total row ----
+        # ---- Center Total ----
         funded_sum   = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
-        wait_sum     = int(group["Waitlist"].sum())
-        lack_sum     = int(group["Lacking"].sum())
+        wait_sum, lack_sum = calc_waitlist_lacking(funded_sum, enrolled_sum)
         pct_total = int(round(enrolled_sum / funded_sum * 100, 0)) if funded_sum > 0 else pd.NA
 
         rows.append({
@@ -193,8 +132,8 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
             "Class": "",
             "Funded": funded_sum,
             "Enrolled": enrolled_sum,
-            "Applied": int(applied_by_center.get(center, 0)),
-            "Accepted": int(accepted_by_center.get(center, 0)),
+            "Applied": int(group["Applied"].max()),
+            "Accepted": int(group["Accepted"].max()),
             "Waitlist": wait_sum,
             "Lacking": lack_sum,
             "% Enrolled of Funded": pct_total
@@ -202,14 +141,13 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # ---- Agency Total (sum of center totals) ----
-    agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
-    agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
-    agency_wait     = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Waitlist"].sum())
-    agency_lack     = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Lacking"].sum())
-    agency_applied  = int(applied_by_center.sum())
-    agency_accepted = int(accepted_by_center.sum())
-    agency_pct = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
+    # ---- Agency Total ----
+    agency_funded   = int(final.loc[final["Center"].str.endswith(" Total"), "Funded"].sum())
+    agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total"), "Enrolled"].sum())
+    wait_agency, lack_agency = calc_waitlist_lacking(agency_funded, agency_enrolled)
+    agency_applied  = int(merged["Applied"].sum())
+    agency_accepted = int(merged["Accepted"].sum())
+    agency_pct      = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
 
     final = pd.concat([
         final,
@@ -220,27 +158,25 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
             "Enrolled": agency_enrolled,
             "Applied": agency_applied,
             "Accepted": agency_accepted,
-            "Waitlist": agency_wait,
-            "Lacking": agency_lack,
+            "Waitlist": wait_agency,
+            "Lacking": lack_agency,
             "% Enrolled of Funded": agency_pct
         }])
     ], ignore_index=True)
 
-    final = final[[
-        "Center","Class","Funded","Enrolled","Applied","Accepted","Waitlist","Lacking","% Enrolled of Funded"
-    ]]
+    final = final[["Center","Class","Funded","Enrolled","Applied","Accepted","Waitlist","Lacking","% Enrolled of Funded"]]
     return final
+
 
 def to_styled_excel(df: pd.DataFrame) -> bytes:
     """
-    Create the Excel with:
+    Styled Excel with:
+    - Blue header row
     - Title + subtitle
-    - Bold headers + filters + freeze panes
-    - % column numeric with % display
-    - Red font for % < 100
-    - Bold rows for center totals and agency total
-    - Optional: red font if Lacking > 0
-    - NO LOGO in the file
+    - Filters, frozen header
+    - % with percent sign
+    - Red font for % < 100 and Lacking > 0
+    - Bold totals
     """
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -249,13 +185,13 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws = writer.sheets["Formatted"]
 
         # Titles
-        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
-        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
+        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center", "font_color": "blue"})
+        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center", "font_color": "blue"})
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, "2025–2026 Campus Classroom Enrollment", subtitle_fmt)
 
-        # Bold headers
-        header_fmt = wb.add_format({"bold": True})
+        # Blue header
+        header_fmt = wb.add_format({"bold": True, "bg_color": "#B7DEE8"})
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
@@ -265,39 +201,36 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.autofilter(3, 0, last_row, last_col)
         ws.freeze_panes(4, 0)
 
-        # % column numeric with percent sign
+        # % col formatting
         percent_col_idx = df.columns.get_loc("% Enrolled of Funded")
         percent_fmt = wb.add_format({"num_format": '0"%"'})
         ws.set_column(percent_col_idx, percent_col_idx, 16, percent_fmt)
 
-        # Conditional red for % < 100
         def colnum_string(n: int) -> str:
             s = ""
             while n >= 0:
                 s = chr(n % 26 + 65) + s
                 n = n // 26 - 1
             return s
+
+        # Conditional red for % < 100
         percent_letter = colnum_string(percent_col_idx)
         percent_range = f"{percent_letter}5:{percent_letter}{last_row+1}"
         ws.conditional_format(percent_range, {
-            "type": "cell",
-            "criteria": "<",
-            "value": 100,
+            "type": "cell", "criteria": "<", "value": 100,
             "format": wb.add_format({"font_color": "red"})
         })
 
-        # Optional: highlight Lacking > 0
+        # Conditional red if Lacking > 0
         lacking_idx = df.columns.get_loc("Lacking")
         lacking_letter = colnum_string(lacking_idx)
         lacking_range = f"{lacking_letter}5:{lacking_letter}{last_row+1}"
         ws.conditional_format(lacking_range, {
-            "type": "cell",
-            "criteria": ">",
-            "value": 0,
+            "type": "cell", "criteria": ">", "value": 0,
             "format": wb.add_format({"font_color": "red"})
         })
 
-        # Bold totals (center rows ending with " Total" or Agency Total)
+        # Bold totals
         bold_fmt = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if (isinstance(val, str) and val.endswith(" Total")) or (val == "Agency Total"):
@@ -313,27 +246,10 @@ if st.button("Process & Download"):
         st.warning("Please upload BOTH files to proceed.")
     else:
         try:
-            # Allow sheet selection if multiple sheets exist
-            vf_xls = pd.ExcelFile(vf_file)
-            vf_sheet = vf_xls.sheet_names[0]
-            if len(vf_xls.sheet_names) > 1:
-                vf_sheet = st.selectbox("Select VF sheet", vf_xls.sheet_names, index=0)
-            vf_raw = pd.read_excel(vf_xls, sheet_name=vf_sheet, header=None)
+            vf_raw = pd.read_excel(vf_file, sheet_name=0, header=None)
+            aa_raw = pd.read_excel(aa_file, sheet_name=0, header=None)
 
-            aa_xls = pd.ExcelFile(aa_file)
-            aa_sheet = aa_xls.sheet_names[0]
-            if len(aa_xls.sheet_names) > 1:
-                aa_sheet = st.selectbox("Select Applied/Accepted sheet", aa_xls.sheet_names, index=0)
-            aa_raw = pd.read_excel(aa_xls, sheet_name=aa_sheet, header=None)
-
-            vf_tidy = parse_vf(
-                vf_raw,
-                totals_label=totals_label_input,
-                idx_enrolled=int(col_enrolled),
-                idx_funded=int(col_funded),
-                idx_waitlist=int(col_waitlist),
-                idx_lacking=int(col_lacking),
-            )
+            vf_tidy = parse_vf(vf_raw)
             aa_counts = parse_applied_accepted(aa_raw)
             final_df = build_output_table(vf_tidy, aa_counts)
 
@@ -349,3 +265,4 @@ if st.button("Process & Download"):
             )
         except Exception as e:
             st.error(f"Processing error: {e}")
+
