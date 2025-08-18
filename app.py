@@ -1,45 +1,17 @@
-# Overwrite app.py with a version that uses a fixed, centered header that reads header_logo.png from the repo root.
-from pathlib import Path
-from textwrap import dedent
-
-updated = dedent(r'''
-import io
-import re
-from pathlib import Path
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+from PIL import Image
+from datetime import datetime, date
 
-st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
+logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
+st.image(logo, width=300)
 
-# ======= Header (centered, fixed logo file: header_logo.png) =======
-logo_path = Path("header_logo.png")
-logo_bytes = None
-if logo_path.exists():
-    try:
-        logo_bytes = logo_path.read_bytes()
-    except Exception:
-        logo_bytes = None
+st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
-# Center the logo
-c1, c2, c3 = st.columns([1, 1, 1])
-with c2:
-    if logo_bytes:
-        st.image(logo_bytes, width=260)
-    else:
-        st.info("Place header_logo.png in the repo root to show the header image.")
-
-# Centered title & subtitle (match your mock)
-st.markdown(
-    "<h1 style='text-align:center; margin-bottom:0;'>HCHSP Enrollment Checklist Formatter (2025–2026)</h1>",
-    unsafe_allow_html=True
-)
-st.markdown(
-    "<p style='text-align:center; font-size:16px; margin-top:4px;'>Upload your <b>Enrollment.xlsx</b> file to receive a formatted version.</p>",
-    unsafe_allow_html=True
-)
-
-st.divider()
+st.title("HCHSP Enrollment Checklist Formatter (2025–2026)")
 
 # ---- Inputs ----
 vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
