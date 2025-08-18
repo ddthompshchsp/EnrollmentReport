@@ -1,23 +1,14 @@
-
 import io
 import re
 import numpy as np
 import pandas as pd
 import streamlit as st
 
+st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
 
-st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
-
-
-logo_bytes = None
-logo_path = Path("header_logo.png")
-if logo_path.exists():
-    try:
-        logo_bytes = logo_path.read_bytes()
-        st.image(logo_bytes, width=300)
-    except Exception:
-        # show nothing if logo can't be read
-        logo_bytes = None
+# ---- Header with optional logo ----
+left, right = st.columns([6, 2])
+with left:
     st.title("Hidalgo County Head Start — Enrollment Formatter")
     st.caption(
         "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
