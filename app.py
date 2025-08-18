@@ -8,9 +8,9 @@ from PIL import Image
 
 st.set_page_config(page_title="HCHSP Enrollment Report Formatter (2025–2026)", layout="wide")
 
-# ---- App Header (logo only in UI; not embedded in Excel) ----
+# ---- App Header (logo only in the UI; not embedded in Excel) ----
 try:
-    logo = Image.open("header_logo.png")  # optional
+    logo = Image.open("header_logo.png")  # optional; safe to remove
     st.image(logo, width=300)
 except Exception:
     pass
@@ -18,7 +18,7 @@ except Exception:
 st.title("HCHSP Enrollment Report Formatter (2025–2026)")
 st.divider()
 
-# ---- Inputs (stacked) ----
+# ---- File Uploads (stacked exactly as requested) ----
 vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
 aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
 
@@ -30,10 +30,12 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     Parse VF report (header=None) into per-class rows:
     Center | Class | Funded | Enrolled
 
-    Assumes:
+    Assumptions for the VF export:
     - Column A contains markers like "HCHSP -- Center Name", "Class X", and a "Class Total..." line per class.
-    - Enrolled is column index 3; Funded is column index 4 on the 'Class Total' line.
-      (Adjust here if your export differs.)
+    - On the 'Class Total' line:
+        Enrolled is at column index 3,
+        Funded is at column index 4.
+    (If your export differs, update the indices below.)
     """
     records = []
     current_center = None
@@ -100,7 +102,7 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def calc_waitlist_lacking(funded: int, enrolled: int) -> tuple[int, int]:
-    """Return (waitlist, lacking) per your rule set."""
+    """Return (waitlist, lacking) using your rule set."""
     if enrolled > funded:
         return enrolled - funded, 0
     elif funded > enrolled:
@@ -110,17 +112,23 @@ def calc_waitlist_lacking(funded: int, enrolled: int) -> tuple[int, int]:
 
 
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build final table:
+    - Class rows show Class (from VF), Funded, Enrolled, Waitlist, Lacking, %, and BLANK Applied/Accepted.
+    - Center Total rows show sums + Applied/Accepted from the A/A file.
+    - Agency Total final row shows overall sums.
+    """
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
 
     rows = []
     for center, group in merged.groupby("Center", sort=True):
-        # ---- Class rows (keep class names) ----
+        # ---- Class rows ----
         for _, r in group.iterrows():
             waitlist, lacking = calc_waitlist_lacking(int(r["Funded"]), int(r["Enrolled"]))
             pct = int(round(r["Enrolled"] / r["Funded"] * 100, 0)) if r["Funded"] > 0 else pd.NA
             rows.append({
                 "Center": r["Center"],
-                "Class": r["Class"],   # exact class name only
+                "Class": r["Class"],   # exact class name from VF
                 "Funded": int(r["Funded"]),
                 "Enrolled": int(r["Enrolled"]),
                 "Applied": "",         # blank on class rows
@@ -151,8 +159,9 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     final = pd.DataFrame(rows)
 
     # ---- Agency Total ----
-    agency_funded   = int(final.loc[final["Center"].str.endswith(" Total"), "Funded"].sum())
-    agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total"), "Enrolled"].sum())
+    center_total_mask = final["Center"].astype(str).str.endswith(" Total", na=False)
+    agency_funded   = int(final.loc[center_total_mask, "Funded"].sum())
+    agency_enrolled = int(final.loc[center_total_mask, "Enrolled"].sum())
     wait_agency, lack_agency = calc_waitlist_lacking(agency_funded, agency_enrolled)
     agency_applied  = int(merged["Applied"].sum())
     agency_accepted = int(merged["Accepted"].sum())
@@ -183,8 +192,8 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
     - Black title/subtitle
     - Blue header band
     - Filters, frozen header
-    - % with percent sign
-    - % < 100 red, % > 100 blue
+    - % with percent sign on every row
+    - % < 100 red, % > 100 blue (100 = black)
     - Lacking > 0 red
     - Bold totals
     """
@@ -213,8 +222,8 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
 
         # % column formatting
         percent_col_idx = df.columns.get_loc("% Enrolled of Funded")
-        percent_fmt = wb.add_format({"num_format": '0"%"'})
-        ws.set_column(percent_col_idx, percent_col_idx, 16, percent_fmt)
+        percent_fmt = wb.add_format({"num_format": '0"%"'})  # whole-number percent with % sign
+        ws.set_column(percent_col_idx, percent_col_idx, 18, percent_fmt)
 
         # Helper: convert 0-based col idx to Excel letter(s)
         def colnum_string(n: int) -> str:
@@ -268,8 +277,8 @@ if st.button("Process & Download"):
             vf_raw = pd.read_excel(vf_file, sheet_name=0, header=None)
             aa_raw = pd.read_excel(aa_file, sheet_name=0, header=None)
 
-            vf_tidy = parse_vf(vf_raw)
-            aa_counts = parse_applied_accepted(aa_raw)
+            vf_tidy = parse_vf(vf_raw)               # gets Center, Class (as in VF), Funded, Enrolled
+            aa_counts = parse_applied_accepted(aa_raw)  # gets Applied, Accepted per Center
             final_df = build_output_table(vf_tidy, aa_counts)
 
             st.success("Preview below. Use the download button to get the Excel file.")
@@ -284,4 +293,5 @@ if st.button("Process & Download"):
             )
         except Exception as e:
             st.error(f"Processing error: {e}")
+
 
