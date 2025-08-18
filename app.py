@@ -1,23 +1,37 @@
 
 import io
 import re
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
 
-# ---- Header with optional logo ----
-left, right = st.columns([6, 2])
-with left:
-    st.title("Hidalgo County Head Start — Enrollment Formatter")
-    st.caption(
-        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
-        "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
-        "and red highlighting for percentages under 100."
-    )
-with right:
-    logo_file = st.file_uploader("Optional: Upload logo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo")
+# -------- Header (uses repo file: header_logo.png) --------
+logo_bytes = None
+logo_path = Path("header_logo.png")
+if logo_path.exists():
+    try:
+        logo_bytes = logo_path.read_bytes()
+    except Exception:
+        logo_bytes = None
+
+# Centered logo
+c1, c2, c3 = st.columns([1, 1, 1])
+with c2:
+    if logo_bytes:
+        st.image(logo_bytes, use_container_width=False, width=260)
+
+# Centered title + subtitle styled to match your mock
+st.markdown(
+    "<h1 style='text-align:center; margin-bottom:0;'>HCHSP Enrollment Checklist Formatter (2025–2026)</h1>",
+    unsafe_allow_html=True
+)
+st.markdown(
+    "<p style='text-align:center; font-size:16px; margin-top:4px;'>Upload your <b>Enrollment.xlsx</b> file to receive a formatted version.</p>",
+    unsafe_allow_html=True
+)
 
 st.divider()
 
@@ -180,16 +194,13 @@ def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, "2025-2026 Campus Classroom Enrollment", subtitle_fmt)
 
-        # Optional logo (top-right corner, first row)
+        # Fixed logo (top-right)
         if logo_bytes is not None:
-            # place it near the top-right corner above the table
             end_col = len(df.columns) - 1
-            # Insert in row 0, last column cell with some scaling if needed
             image_opts = {"x_scale": 0.6, "y_scale": 0.6, "x_offset": 10, "y_offset": 2}
             try:
-                ws.insert_image(0, end_col, "logo.png", {"image_data": io.BytesIO(logo_bytes), **image_opts})
+                ws.insert_image(0, end_col, "header_logo.png", {"image_data": io.BytesIO(logo_bytes), **image_opts})
             except Exception:
-                # if insert fails, ignore logo rather than failing the whole export
                 pass
 
         # Bold headers
@@ -248,8 +259,7 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.success("Preview below. Use the download button to get the Excel file.")
         st.dataframe(final_df, use_container_width=True)
 
-        # Pass logo bytes if provided
-        logo_bytes = logo_file.read() if logo_file is not None else None
+        # Use fixed header_logo.png for Excel export too
         xlsx_bytes = to_styled_excel(final_df, logo_bytes)
 
         st.download_button(
