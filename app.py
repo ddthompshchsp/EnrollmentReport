@@ -208,8 +208,8 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         wb = writer.book
         ws = writer.sheets["Formatted"]
 
-        # Hide gridlines so nothing shows outside the box
-        ws.hide_gridlines(2)
+      
+        ws.hide_gridlines(0)
 
         # Titles with today's date in M.D.YY (INSIDE the box)
         d = date.today()
