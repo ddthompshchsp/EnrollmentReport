@@ -21,8 +21,7 @@ with hdr_c:
     st.markdown(
         "<p style='text-align:center; font-size:16px; margin-top:0;'>"
         "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
-        "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
-        "and color highlighting for percentages.</p>",
+        </p>",
         unsafe_allow_html=True,
     )
 
