@@ -1,41 +1,39 @@
+# Overwrite app.py with a centered header (no logo uploader), fix missing imports, and wire header_logo.png into Excel export.
 from pathlib import Path
 from textwrap import dedent
 
-# Build an updated app.py with a fixed, centered header (uses header_logo.png from repo root)
-updated_app = dedent(r'''
+new_app = dedent(r'''
 import io
 import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+from PIL import Image
 
-st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
+st.set_page_config(page_title="HCHSP Enrollment Report (2025–2026)", layout="wide")
 
-# -------- Header (uses repo file: header_logo.png) --------
-logo_bytes = None
+# ===== Header (centered logo + title, no logo uploader) =====
 logo_path = Path("header_logo.png")
+logo_bytes = None
 if logo_path.exists():
     try:
         logo_bytes = logo_path.read_bytes()
     except Exception:
         logo_bytes = None
 
-# Centered logo
-c1, c2, c3 = st.columns([1, 1, 1])
-with c2:
-    if logo_bytes:
-        st.image(logo_bytes, use_container_width=False, width=260)
-
-# Centered title + subtitle styled to match your mock
-st.markdown(
-    "<h1 style='text-align:center; margin-bottom:0;'>HCHSP Enrollment Checklist Formatter (2025–2026)</h1>",
-    unsafe_allow_html=True
-)
-st.markdown(
-    "<p style='text-align:center; font-size:16px; margin-top:4px;'>Upload your <b>Enrollment.xlsx</b> file to receive a formatted version.</p>",
-    unsafe_allow_html=True
-)
+col_l, col_c, col_r = st.columns([1, 2, 1])
+with col_c:
+    if logo_path.exists():
+        st.image(str(logo_path), width=300)
+    st.markdown(
+        "<h1 style='text-align:center; margin-top:0; margin-bottom:6px;'>HCHSP Enrollment Report (2025–2026)</h1>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        "<p style='text-align:center; font-size:16px; margin-top:0;'>Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report, then click Process & Download.</p>",
+        unsafe_allow_html=True
+    )
 
 st.divider()
 
@@ -263,11 +261,9 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.success("Preview below. Use the download button to get the Excel file.")
         st.dataframe(final_df, use_container_width=True)
 
-        # Use fixed header_logo.png for Excel export too
         xlsx_bytes = to_styled_excel(final_df, logo_bytes)
-
         st.download_button(
-            "Download Formatted Excel",
+            "Process & Download",
             data=xlsx_bytes,
             file_name="HCHSP_Enrollment_Formatted.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -276,7 +272,6 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.error(f"Processing error: {e}")
 ''')
 
-out_path = Path("/mnt/data/app_with_header.py")
-out_path.write_text(updated_app, encoding="utf-8")
-out_path
+Path("/mnt/data/app.py").write_text(new_app, encoding="utf-8")
+"/mnt/data/app.py"
 
