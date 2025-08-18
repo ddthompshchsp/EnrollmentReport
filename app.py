@@ -211,41 +211,51 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         wb = writer.book
         ws = writer.sheets["Formatted"]
 
-        # Titles
+        # ---- Titles (keep your wording) ----
         title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
         subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, "2025-2026 Campus Classroom Enrollment", subtitle_fmt)
 
-        # Bold headers
-        header_fmt = wb.add_format({"bold": True})
+        # ---- Header bar: dark blue, white, centered, wrapped ----
+        header_fmt = wb.add_format({
+            "bold": True, "font_color": "white", "bg_color": "#305496",
+            "align": "center", "valign": "vcenter", "text_wrap": True, "border": 1
+        })
+        ws.set_row(3, 26)  # taller header like screenshot
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
-        # Filters + freeze header
+        # ---- Filters + freeze header ----
         last_row = len(df) + 3
         last_col = len(df.columns) - 1
         ws.autofilter(3, 0, last_row, last_col)
         ws.freeze_panes(4, 0)
 
-        # ===== Formats: only % column shows percent =====
+        # ---- Column widths & base number formats ----
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
-        pct_fmt = wb.add_format({'num_format': '0"%"'})
-        ws.set_column(pct_idx, pct_idx, 18, pct_fmt)
+        pct_fmt = wb.add_format({'num_format': '0"%"', 'align': 'center'})
+        int_fmt = wb.add_format({'num_format': '0', 'align': 'right'})
 
-        # Integer formatting for other numeric columns
-        int_fmt = wb.add_format({'num_format': '0'})
-        for name, width in [
-            ("Funded", 12), ("Enrolled", 12), ("Waitlist", 12),
-            ("Lacking", 12), ("Applied", 12), ("Accepted", 12),
-        ]:
+        # Set widths & formats (integers on numeric, text columns wider)
+        ws.set_column(0, 0, 28)                    # Center
+        ws.set_column(1, 1, 14)                    # Class
+        for name, width in [("Funded", 12), ("Enrolled", 12), ("Waitlist", 12),
+                            ("Lacking", 12), ("Applied", 12), ("Accepted", 12)]:
             idx = df.columns.get_loc(name)
             ws.set_column(idx, idx, width, int_fmt)
+        ws.set_column(pct_idx, pct_idx, 16, pct_fmt)
 
-        # Optional: wider text columns
-        ws.set_column(0, 1, 22)  # Center, Class
+        # ---- Zebra striping on data rows (like screenshot) ----
+        data_range = f"A5:{chr(65+last_col)}{last_row+1}"
+        band_fmt = wb.add_format({"bg_color": "#F2F2F2"})  # light gray stripe
+        ws.conditional_format(data_range, {
+            "type": "formula",
+            "criteria": '=MOD(ROW(),2)=0',
+            "format": band_fmt
+        })
 
-        # Conditional formatting for % column only
+        # ---- % column conditional colors ----
         def colnum_string(n: int) -> str:
             s = ""
             while n >= 0:
@@ -255,22 +265,20 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         pct_letter = colnum_string(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_row+1}"
 
-        # red if < 100
         ws.conditional_format(pct_range, {
             "type": "cell", "criteria": "<", "value": 100,
             "format": wb.add_format({"font_color": "red"})
         })
-        # blue if > 100
         ws.conditional_format(pct_range, {
             "type": "cell", "criteria": ">", "value": 100,
             "format": wb.add_format({"font_color": "blue"})
         })
 
-        # Bold totals
-        bold_fmt = wb.add_format({"bold": True})
+        # ---- Totals rows: bold + light gray fill ----
+        total_fmt = wb.add_format({"bold": True, "bg_color": "#D9D9D9"})
         for ridx, val in enumerate(df["Center"].tolist()):
-            if (isinstance(val, str) and val.endswith(" Total")) or (val == "Agency Total"):
-                ws.set_row(ridx + 4, None, bold_fmt)
+            if (isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total")):
+                ws.set_row(ridx + 4, None, total_fmt)
 
     return output.getvalue()
 
