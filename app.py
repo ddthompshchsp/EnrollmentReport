@@ -9,6 +9,7 @@ import streamlit as st
 st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
 
 
+
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
@@ -19,9 +20,11 @@ with hdr_c:
         unsafe_allow_html=True,
     )
     st.markdown(
-        "<p style='text-align:center; font-size:16px; margin-top:0;'>"
-        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. 
-        </p>",
+        """
+        <p style='text-align:center; font-size:16px; margin-top:0;'>
+        Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report.
+        </p>
+        """,
         unsafe_allow_html=True,
     )
 
