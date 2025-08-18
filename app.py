@@ -1,29 +1,23 @@
-# Re-write app.py using triple single-quotes to avoid nested triple-quote issues.
-from pathlib import Path
 
-app_clean = '''
 import io
 import re
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
 
-# ---- Centered header (uses header_logo.png in repo root; no uploader) ----
-logo_path = Path("header_logo.png")
-if logo_path.exists():
-    st.image(str(logo_path), width=280)
-
-st.markdown(
-    "<h1 style='text-align:center; margin: 6px 0 4px 0;'>Hidalgo County Head Start — Enrollment Formatter</h1>",
-    unsafe_allow_html=True
-)
-st.markdown(
-    "<p style='text-align:center; font-size:16px;'>Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report.</p>",
-    unsafe_allow_html=True
-)
+# ---- Header with optional logo ----
+left, right = st.columns([6, 2])
+with left:
+    st.title("Hidalgo County Head Start — Enrollment Formatter")
+    st.caption(
+        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
+        "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
+        "and red highlighting for percentages under 100."
+    )
+with right:
+    logo_file = st.file_uploader("Optional: Upload logo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo")
 
 st.divider()
 
@@ -48,14 +42,14 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         c0 = vf_df_raw.iloc[i, 0]
         if isinstance(c0, str) and c0.startswith("HCHSP --"):
             current_center = c0.strip()
-        elif isinstance(c0, str) and re.match(r"^Class \\d+", c0):
+        elif isinstance(c0, str) and re.match(r"^Class \d+", c0):
             current_class = c0.split(" ", 1)[1].strip()
 
         if c0 == "Class Totals:" and current_center and current_class:
             row = vf_df_raw.iloc[i]
             funded = pd.to_numeric(row.iloc[4], errors="coerce")  # Number of Federal Slots Available
             enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # Number of Children Enrolled
-            center_clean = re.sub(r"^HCHSP --\\s*", "", current_center)
+            center_clean = re.sub(r"^HCHSP --\s*", "", current_center)
             records.append({
                 "Center": center_clean,
                 "Class": f"Class {current_class}",
@@ -86,7 +80,7 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     date_col = "ST: Status End Date"
 
     body = body[body[date_col].isna()].copy()
-    body[center_col] = body[center_col].astype(str).str.replace(r"^HCHSP --\\s*", "", regex=True)
+    body[center_col] = body[center_col].astype(str).str.replace(r"^HCHSP --\s*", "", regex=True)
 
     counts = body.groupby(center_col)[status_col].value_counts().unstack(fill_value=0)
     for c in ["Accepted", "Applied"]:
@@ -164,11 +158,11 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 
-def to_styled_excel(df: pd.DataFrame) -> bytes:
+def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
     """
     Create the Excel with:
     - Title + subtitle
-    - Fixed logo (top-right) if header_logo.png exists
+    - Optional logo (top-right)
     - Bold headers + filters + freeze panes
     - % column numeric with % display
     - Red font for % < 100
@@ -186,12 +180,16 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, "2025-2026 Campus Classroom Enrollment", subtitle_fmt)
 
-        # Fixed logo (top-right)
-        logo_path = Path("header_logo.png")
-        if logo_path.exists():
+        # Optional logo (top-right corner, first row)
+        if logo_bytes is not None:
+            # place it near the top-right corner above the table
+            end_col = len(df.columns) - 1
+            # Insert in row 0, last column cell with some scaling if needed
+            image_opts = {"x_scale": 0.6, "y_scale": 0.6, "x_offset": 10, "y_offset": 2}
             try:
-                ws.insert_image(0, len(df.columns)-1, str(logo_path), {"x_scale": 0.6, "y_scale": 0.6, "x_offset": 10, "y_offset": 2})
+                ws.insert_image(0, end_col, "logo.png", {"image_data": io.BytesIO(logo_bytes), **image_opts})
             except Exception:
+                # if insert fails, ignore logo rather than failing the whole export
                 pass
 
         # Bold headers
@@ -250,7 +248,10 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.success("Preview below. Use the download button to get the Excel file.")
         st.dataframe(final_df, use_container_width=True)
 
-        xlsx_bytes = to_styled_excel(final_df)
+        # Pass logo bytes if provided
+        logo_bytes = logo_file.read() if logo_file is not None else None
+        xlsx_bytes = to_styled_excel(final_df, logo_bytes)
+
         st.download_button(
             "Download Formatted Excel",
             data=xlsx_bytes,
@@ -259,6 +260,3 @@ if st.button("Process & Download") and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
-'''
-Path("/mnt/data/app.py").write_text(app_clean, encoding="utf-8")
-"/mnt/data/app.py"
