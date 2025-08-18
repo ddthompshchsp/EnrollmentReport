@@ -6,17 +6,12 @@ import streamlit as st
 
 st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
 
-# ---- Header with optional logo ----
-left, right = st.columns([6, 2])
-with left:
-    st.title("Hidalgo County Head Start — Enrollment Formatter")
-    st.caption(
-        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
-        "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
-        "and red highlighting for percentages under 100."
-    )
-with right:
-    logo_file = st.file_uploader("Optional: Upload logo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo")
+logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
+st.image(logo, width=300)
+
+st.set_page_config(page_title="Enrollment Formatter", layout="centered")
+
+st.title("HCHSP Enrollment Checklist Formatter (2025–2026)")
 
 st.divider()
 
