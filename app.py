@@ -1,39 +1,27 @@
-# Overwrite app.py with a centered header (no logo uploader), fix missing imports, and wire header_logo.png into Excel export.
-from pathlib import Path
+# Write a complete Streamlit app (with logo support) and packaging files to /mnt/data so you can grab them.
 from textwrap import dedent
+from pathlib import Path
 
-new_app = dedent(r'''
+app_py = dedent(r'''
 import io
 import re
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
 
-st.set_page_config(page_title="HCHSP Enrollment Report (2025–2026)", layout="wide")
+st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
 
-# ===== Header (centered logo + title, no logo uploader) =====
-logo_path = Path("header_logo.png")
-logo_bytes = None
-if logo_path.exists():
-    try:
-        logo_bytes = logo_path.read_bytes()
-    except Exception:
-        logo_bytes = None
-
-col_l, col_c, col_r = st.columns([1, 2, 1])
-with col_c:
-    if logo_path.exists():
-        st.image(str(logo_path), width=300)
-    st.markdown(
-        "<h1 style='text-align:center; margin-top:0; margin-bottom:6px;'>HCHSP Enrollment Report (2025–2026)</h1>",
-        unsafe_allow_html=True
+# ---- Header with optional logo ----
+left, right = st.columns([6, 2])
+with left:
+    st.title("Hidalgo County Head Start — Enrollment Formatter")
+    st.caption(
+        "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
+        "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
+        "and red highlighting for percentages under 100."
     )
-    st.markdown(
-        "<p style='text-align:center; font-size:16px; margin-top:0;'>Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report, then click Process & Download.</p>",
-        unsafe_allow_html=True
-    )
+with right:
+    logo_file = st.file_uploader("Optional: Upload logo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo")
 
 st.divider()
 
@@ -196,13 +184,16 @@ def to_styled_excel(df: pd.DataFrame, logo_bytes: bytes | None) -> bytes:
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, "2025-2026 Campus Classroom Enrollment", subtitle_fmt)
 
-        # Fixed logo (top-right)
+        # Optional logo (top-right corner, first row)
         if logo_bytes is not None:
+            # place it near the top-right corner above the table
             end_col = len(df.columns) - 1
+            # Insert in row 0, last column cell with some scaling if needed
             image_opts = {"x_scale": 0.6, "y_scale": 0.6, "x_offset": 10, "y_offset": 2}
             try:
-                ws.insert_image(0, end_col, "header_logo.png", {"image_data": io.BytesIO(logo_bytes), **image_opts})
+                ws.insert_image(0, end_col, "logo.png", {"image_data": io.BytesIO(logo_bytes), **image_opts})
             except Exception:
+                # if insert fails, ignore logo rather than failing the whole export
                 pass
 
         # Bold headers
@@ -261,9 +252,12 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.success("Preview below. Use the download button to get the Excel file.")
         st.dataframe(final_df, use_container_width=True)
 
+        # Pass logo bytes if provided
+        logo_bytes = logo_file.read() if logo_file is not None else None
         xlsx_bytes = to_styled_excel(final_df, logo_bytes)
+
         st.download_button(
-            "Process & Download",
+            "Download Formatted Excel",
             data=xlsx_bytes,
             file_name="HCHSP_Enrollment_Formatted.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -272,6 +266,27 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.error(f"Processing error: {e}")
 ''')
 
-Path("/mnt/data/app.py").write_text(new_app, encoding="utf-8")
-"/mnt/data/app.py"
+requirements_txt = dedent('''
+streamlit==1.37.1
+pandas==2.2.2
+numpy==1.26.4
+openpyxl==3.1.5
+XlsxWriter==3.2.0
+''')
+
+readme_md = dedent('''
+# HCHSP Enrollment Formatter
+
+A Streamlit app that formats the VF "Average Funded Enrollment" report and an "Applied/Accepted" report into a single styled Excel file with:
+- Titles and optional logo
+- Bold headers, filters, and frozen header row
+- Center totals (Center column shows "<Exact Center Name> Total", Class column blank)
+- Agency total
+- "% Enrolled of Funded" shown as whole-number percent with **red** text when under 100
+
+## Run locally
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
 
