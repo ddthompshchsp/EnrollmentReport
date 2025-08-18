@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
+st.set_page_config(page_title="HCHSP Enrollment Report Formatter", layout="wide")
 
 logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
 st.image(logo, width=300)
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
-st.title("HCHSP Enrollment Checklist Formatter (2025–2026)")
+st.title("HCHSP Enrollment Report Formatter (2025–2026)")
 
 st.divider()
 
