@@ -123,7 +123,11 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     accepted_by_center = merged.groupby("Center")["Accepted"].max()
 
     rows = []
+    agency_waitlist_sum = 0
+    agency_lacking_sum = 0
+
     for center, group in merged.groupby("Center", sort=True):
+        # Class rows (center-only fields blank)
         for _, r in group.iterrows():
             rows.append({
                 "Center": r["Center"],
@@ -137,23 +141,23 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
                 "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
             })
 
+        # Center totals
         funded_sum = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
         pct_total = int(round(enrolled_sum / funded_sum * 100, 0)) if funded_sum > 0 else pd.NA
 
-        waitlist_total = enrolled_sum - funded_sum
-        waitlist_total = "" if waitlist_total <= 0 else int(waitlist_total)
-
-        lacking_total = funded_sum - enrolled_sum
-        lacking_total = "" if lacking_total <= 0 else int(lacking_total)
+        waitlist_val = max(enrolled_sum - funded_sum, 0)
+        lacking_val  = max(funded_sum - enrolled_sum, 0)
+        agency_waitlist_sum += waitlist_val
+        agency_lacking_sum  += lacking_val
 
         rows.append({
             "Center": f"{center} Total",
             "Class": "",
             "Funded": funded_sum,
             "Enrolled": enrolled_sum,
-            "Waitlist": waitlist_total,
-            "Lacking": lacking_total,
+            "Waitlist": ("" if waitlist_val == 0 else int(waitlist_val)),
+            "Lacking": ("" if lacking_val == 0 else int(lacking_val)),
             "Applied": int(applied_by_center.get(center, 0)),
             "Accepted": int(accepted_by_center.get(center, 0)),
             "% Enrolled of Funded": pct_total
@@ -161,26 +165,20 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # Agency totals computed directly from filtered center-level counts
+    # Agency totals (Applied/Accepted from filtered counts; Waitlist/Lacking are sums of center totals)
     agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(counts["Applied"].sum())
     agency_accepted = int(counts["Accepted"].sum())
     agency_pct = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
 
-    agency_waitlist = agency_enrolled - agency_funded
-    agency_waitlist = "" if agency_waitlist <= 0 else int(agency_waitlist)
-
-    agency_lacking = agency_funded - agency_enrolled
-    agency_lacking = "" if agency_lacking <= 0 else int(agency_lacking)
-
     final = pd.concat([final, pd.DataFrame([{
         "Center": "Agency Total",
         "Class": "",
         "Funded": agency_funded,
         "Enrolled": agency_enrolled,
-        "Waitlist": agency_waitlist,
-        "Lacking": agency_lacking,
+        "Waitlist": ("" if agency_waitlist_sum == 0 else int(agency_waitlist_sum)),
+        "Lacking": ("" if agency_lacking_sum == 0 else int(agency_lacking_sum)),
         "Applied": agency_applied,
         "Accepted": agency_accepted,
         "% Enrolled of Funded": agency_pct
@@ -195,7 +193,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
 
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Write styled Excel with boxed title+table; rest of sheet normal."""
+    """Write styled Excel with a single boxed region (title + header + data); outside = plain sheet with gridlines hidden."""
     # Helpers for A1 ranges
     def col_letter(n: int) -> str:
         s = ""
@@ -210,11 +208,14 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         wb = writer.book
         ws = writer.sheets["Formatted"]
 
-        # Titles with today's date in M.D.YY (IN the box)
+        # Hide gridlines so nothing shows outside the box
+        ws.hide_gridlines(2)
+
+        # Titles with today's date in M.D.YY (INSIDE the box)
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
-        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center", "bg_color": "#FFFFFF"})
-        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center", "bg_color": "#FFFFFF"})
+        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
+        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, f"2025-2026 Campus Classroom Enrollment — {date_str}", subtitle_fmt)
 
@@ -227,7 +228,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
-        # Compute ranges
+        # Compute ranges for the boxed region
         last_row_0 = len(df) + 3                # 0-based last data row
         last_col_0 = len(df.columns) - 1
         first_row_excel = 1                     # include title row 1 in box
@@ -240,13 +241,13 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.autofilter(3, 0, last_row_0, last_col_0)
         ws.freeze_panes(4, 0)
 
-        # Base formats (white fill inside the box to suppress gridlines)
+        # Base formats
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
-        pct_fmt = wb.add_format({'num_format': '0"%"', 'align': 'center', 'bg_color': '#FFFFFF'})
-        int_fmt = wb.add_format({'num_format': '0', 'align': 'right', 'bg_color': '#FFFFFF'})
-        text_fmt = wb.add_format({'align': 'left', 'bg_color': '#FFFFFF'})
+        pct_fmt = wb.add_format({'num_format': '0"%"', 'align': 'center'})
+        int_fmt = wb.add_format({'num_format': '0', 'align': 'right'})
+        text_fmt = wb.add_format({'align': 'left'})
 
-        # Column widths & defaults (apply white fill as default inside box)
+        # Column widths & defaults
         ws.set_column(0, 0, 28, text_fmt)  # Center
         ws.set_column(1, 1, 14, text_fmt)  # Class
         for name, width in [("Funded", 12), ("Enrolled", 12), ("Waitlist", 12),
@@ -282,13 +283,12 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, total_fmt)
 
-        # ===== Box around title + header + data (everything we formatted) =====
+        # ===== Single thick box around title + header + data =====
         top_border    = wb.add_format({"top": 2})
         bottom_border = wb.add_format({"bottom": 2})
         left_border   = wb.add_format({"left": 2})
         right_border  = wb.add_format({"right": 2})
 
-        # Apply to edges unconditionally so merges/blanks are included
         # Top (row 1), Bottom (last data row)
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{last_col_letter}{first_row_excel}",
                               {"type": "formula", "criteria": "TRUE", "format": top_border})
@@ -300,7 +300,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": right_border})
 
-        # Note: We DID NOT hide gridlines, so everything OUTSIDE the box remains normal.
+        # Outside this box: gridlines are hidden, so it looks blank/clean.
 
     return output.getvalue()
 
@@ -334,6 +334,5 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
-
 
 
