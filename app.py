@@ -8,9 +8,7 @@ import streamlit as st
 
 st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
 
-# =========================
-# Centered header (logo + title on the app only)
-# =========================
+
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
@@ -30,9 +28,7 @@ with hdr_c:
 
 st.divider()
 
-# =========================
-# Centered inputs
-# =========================
+
 vf_file = None
 aa_file = None
 process = False
@@ -42,9 +38,7 @@ with inp_c:
     aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
     process = st.button("Process & Download")
 
-# ----------------------------
-# Utilities
-# ----------------------------
+
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """Parse VF report (header=None) into per-class rows: Center | Class | Funded | Enrolled"""
     records = []
