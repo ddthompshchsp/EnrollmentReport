@@ -1,4 +1,8 @@
+# Overwrite app.py with a version that uses a fixed, centered header that reads header_logo.png from the repo root.
+from pathlib import Path
+from textwrap import dedent
 
+updated = dedent(r'''
 import io
 import re
 from pathlib import Path
@@ -8,22 +12,24 @@ import streamlit as st
 
 st.set_page_config(page_title="HCHSP Enrollment Formatter", layout="wide")
 
-# -------- Header (uses repo file: header_logo.png) --------
-logo_bytes = None
+# ======= Header (centered, fixed logo file: header_logo.png) =======
 logo_path = Path("header_logo.png")
+logo_bytes = None
 if logo_path.exists():
     try:
         logo_bytes = logo_path.read_bytes()
     except Exception:
         logo_bytes = None
 
-# Centered logo
+# Center the logo
 c1, c2, c3 = st.columns([1, 1, 1])
 with c2:
     if logo_bytes:
-        st.image(logo_bytes, use_container_width=False, width=260)
+        st.image(logo_bytes, width=260)
+    else:
+        st.info("Place header_logo.png in the repo root to show the header image.")
 
-# Centered title + subtitle styled to match your mock
+# Centered title & subtitle (match your mock)
 st.markdown(
     "<h1 style='text-align:center; margin-bottom:0;'>HCHSP Enrollment Checklist Formatter (2025–2026)</h1>",
     unsafe_allow_html=True
@@ -259,9 +265,7 @@ if st.button("Process & Download") and vf_file and aa_file:
         st.success("Preview below. Use the download button to get the Excel file.")
         st.dataframe(final_df, use_container_width=True)
 
-        # Use fixed header_logo.png for Excel export too
         xlsx_bytes = to_styled_excel(final_df, logo_bytes)
-
         st.download_button(
             "Download Formatted Excel",
             data=xlsx_bytes,
@@ -270,3 +274,8 @@ if st.button("Process & Download") and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+''')
+
+Path("/mnt/data/app.py").write_text(updated, encoding="utf-8")
+"/mnt/data/app.py"
+
