@@ -23,8 +23,7 @@ with hdr_c:
         "<p style='text-align:center; font-size:16px; margin-top:0;'>"
         "Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report. "
         "This produces a styled Excel with titles, bold headers, filters, center totals, an agency total, "
-        "and red highlighting for percentages under 100."
-        "</p>",
+        "and color highlighting for percentages.</p>",
         unsafe_allow_html=True,
     )
 
@@ -57,14 +56,14 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         c0 = vf_df_raw.iloc[i, 0]
         if isinstance(c0, str) and c0.startswith("HCHSP --"):
             current_center = c0.strip()
-        elif isinstance(c0, str) and re.match(r"^Class \d+", c0):
+        elif isinstance(c0, str) and re.match(r"^Class \\d+", c0):
             current_class = c0.split(" ", 1)[1].strip()
 
         if c0 == "Class Totals:" and current_center and current_class:
             row = vf_df_raw.iloc[i]
-            funded = pd.to_numeric(row.iloc[4], errors="coerce")  # Federal Slots Available
-            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")  # Children Enrolled
-            center_clean = re.sub(r"^HCHSP --\s*", "", current_center)
+            funded = pd.to_numeric(row.iloc[4], errors="coerce")
+            enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
+            center_clean = re.sub(r"^HCHSP --\\s*", "", current_center)
             records.append({
                 "Center": center_clean,
                 "Class": f"Class {current_class}",
@@ -92,7 +91,7 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     date_col = "ST: Status End Date"
 
     body = body[body[date_col].isna()].copy()
-    body[center_col] = body[center_col].astype(str).str.replace(r"^HCHSP --\s*", "", regex=True)
+    body[center_col] = body[center_col].astype(str).str.replace(r"^HCHSP --\\s*", "", regex=True)
 
     counts = body.groupby(center_col)[status_col].value_counts().unstack(fill_value=0)
     for c in ["Accepted", "Applied"]:
@@ -103,7 +102,10 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
-    """Merge class rows with center counts; add Center Totals and Agency Total; blank Applied/Accepted on class rows."""
+    """Merge class rows with center counts; add Center Totals and Agency Total.
+       Class rows: Applied/Accepted/Waitlist/Lacking blank.
+       Totals rows: show Applied/Accepted + Waitlist + Lacking.
+    """
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
     merged["% Enrolled of Funded"] = np.where(
         merged["Funded"] > 0,
@@ -116,25 +118,38 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     rows = []
     for center, group in merged.groupby("Center", sort=True):
+        # class rows (blanks for the four center-only columns)
         for _, r in group.iterrows():
             rows.append({
                 "Center": r["Center"],
                 "Class": r["Class"],
                 "Funded": int(r["Funded"]),
                 "Enrolled": int(r["Enrolled"]),
-                "Applied": "",
-                "Accepted": "",
+                "Waitlist": "",   # center-only
+                "Lacking": "",    # center-only
+                "Applied": "",    # center-only
+                "Accepted": "",   # center-only
                 "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
             })
+
+        # center totals
         funded_sum = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
         pct_total = int(round(enrolled_sum / funded_sum * 100, 0)) if funded_sum > 0 else pd.NA
+
+        waitlist_total = enrolled_sum - funded_sum
+        waitlist_total = "" if waitlist_total <= 0 else int(waitlist_total)
+
+        lacking_total = funded_sum - enrolled_sum
+        lacking_total = "" if lacking_total <= 0 else int(lacking_total)
 
         rows.append({
             "Center": f"{center} Total",
             "Class": "",
             "Funded": funded_sum,
             "Enrolled": enrolled_sum,
+            "Waitlist": waitlist_total,
+            "Lacking": lacking_total,
             "Applied": int(applied_by_center.get(center, 0)),
             "Accepted": int(accepted_by_center.get(center, 0)),
             "% Enrolled of Funded": pct_total
@@ -142,24 +157,37 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # Agency totals from center totals
-    agency_funded = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
+    # Agency totals computed from center totals
+    agency_funded  = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(applied_by_center.sum())
     agency_accepted = int(accepted_by_center.sum())
     agency_pct = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
+
+    agency_waitlist = agency_enrolled - agency_funded
+    agency_waitlist = "" if agency_waitlist <= 0 else int(agency_waitlist)
+
+    agency_lacking = agency_funded - agency_enrolled
+    agency_lacking = "" if agency_lacking <= 0 else int(agency_lacking)
 
     final = pd.concat([final, pd.DataFrame([{
         "Center": "Agency Total",
         "Class": "",
         "Funded": agency_funded,
         "Enrolled": agency_enrolled,
+        "Waitlist": agency_waitlist,
+        "Lacking": agency_lacking,
         "Applied": agency_applied,
         "Accepted": agency_accepted,
         "% Enrolled of Funded": agency_pct
     }])], ignore_index=True)
 
-    return final[["Center","Class","Funded","Enrolled","Applied","Accepted","% Enrolled of Funded"]]
+    # Final column order
+    final = final[[
+        "Center","Class","Funded","Enrolled","Waitlist","Lacking",
+        "Applied","Accepted","% Enrolled of Funded"
+    ]]
+    return final
 
 
 def to_styled_excel(df: pd.DataFrame) -> bytes:
@@ -187,12 +215,24 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.autofilter(3, 0, last_row, last_col)
         ws.freeze_panes(4, 0)
 
-        # % column numeric with percent sign
+        # ===== Formats: only % column shows percent =====
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
         pct_fmt = wb.add_format({'num_format': '0"%"'})
-        ws.set_column(pct_idx, pct_idx, 16, pct_fmt)
+        ws.set_column(pct_idx, pct_idx, 18, pct_fmt)
 
-        # Conditional red for % < 100
+        # Force integer formatting for all other numeric columns
+        int_fmt = wb.add_format({'num_format': '0'})
+        for name, width in [
+            ("Funded", 12), ("Enrolled", 12), ("Waitlist", 12),
+            ("Lacking", 12), ("Applied", 12), ("Accepted", 12),
+        ]:
+            idx = df.columns.get_loc(name)
+            ws.set_column(idx, idx, width, int_fmt)
+
+        # Optional: wider text columns
+        ws.set_column(0, 1, 22)  # Center, Class
+
+        # Conditional formatting for % column only
         def colnum_string(n: int) -> str:
             s = ""
             while n >= 0:
@@ -202,22 +242,18 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         pct_letter = colnum_string(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_row+1}"
 
+        # red if < 100
         ws.conditional_format(pct_range, {
-            "type": "cell",
-            "criteria": "<",
-            "value": 100,
+            "type": "cell", "criteria": "<", "value": 100,
             "format": wb.add_format({"font_color": "red"})
         })
-
-        # NEW: blue for > 100
+        # blue if > 100
         ws.conditional_format(pct_range, {
-            "type": "cell",
-            "criteria": ">",
-            "value": 100,
+            "type": "cell", "criteria": ">", "value": 100,
             "format": wb.add_format({"font_color": "blue"})
         })
 
-        # Bold total rows
+        # Bold totals
         bold_fmt = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if (isinstance(val, str) and val.endswith(" Total")) or (val == "Agency Total"):
@@ -238,12 +274,15 @@ if process and vf_file and aa_file:
         aa_counts = parse_applied_accepted(aa_raw)
         final_df = build_output_table(vf_tidy, aa_counts)
 
+        # Preview with % signs (display-only on the % column)
         st.success("Preview below. Use the download button to get the Excel file.")
-        st.dataframe(final_df, use_container_width=True)
+        preview_df = final_df.copy()
+        pct_col = "% Enrolled of Funded"
+        preview_df[pct_col] = preview_df[pct_col].apply(lambda v: "" if pd.isna(v) else f"{int(v)}%")
+        st.dataframe(preview_df, use_container_width=True)
 
         # Export WITHOUT logo
         xlsx_bytes = to_styled_excel(final_df)
-
         st.download_button(
             "Download Formatted Excel",
             data=xlsx_bytes,
