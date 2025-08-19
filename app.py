@@ -41,11 +41,11 @@ with inp_c:
     process = st.button("Process & Download")
 
 # ----------------------------
-# Static Lic. Cap values (edit as needed)
+# Static Lic. Cap values (edit here if your caps change)
 # Keys should match the cleaned center names that appear in the VF report.
 # ----------------------------
 LIC_CAPS = {
-    "Alvarez-McAllen ISD": 138,
+  "Alvarez-McAllen ISD": 138,
     "Camarena-La Joya ISD": 192,
     "Chapa-La Joya ISD": 154,
     "Edinburg": 232,
@@ -219,7 +219,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # Agency totals (NO Lic. Cap here per your request)
+    # Agency totals (Lic. Cap intentionally blank)
     agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(counts["Applied"].sum())
@@ -231,7 +231,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         "Center": "Agency Total",
         "Class": "",
         "# Classrooms": agency_classrooms_total,
-        "Lic. Cap": "",  # <- leave blank
+        "Lic. Cap": "",
         "Funded": agency_funded,
         "Enrolled": agency_enrolled,
         "Applied": agency_applied,
@@ -249,10 +249,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (logo at B1, titles in C..last, thick outer box from row 1)
+# Excel Writer (logo at A1, titles in B..last, thick outer box from row 1)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Logo at B1 (53% scale); titles with no inner lines; thick outer box from row 1; borders on table; gridlines outside kept; explicit edges on rows 1–3."""
+    """Logo at A1 (53% scale); titles merged in B..last; thick outer box from row 1 (edges continuous across title); borders on table; gridlines outside kept."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -266,26 +266,28 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         wb = writer.book
         ws = writer.sheets["Head Start Enrollment"]
 
+        # Keep default gridlines visible outside the table
         ws.hide_gridlines(0)
 
-        # Title area heights
+        # Title area row heights
         ws.set_row(0, 24)  # title
         ws.set_row(1, 22)  # subtitle
-        ws.set_row(2, 20)  # spacer
+        ws.set_row(2, 20)  # spacer above header
 
-        # Logo at B1 (53% scale)
+        # --- LOGO in column A (A1) ---
         logo = Path("header_logo.png")
         if logo.exists():
-            ws.set_column(1, 1, 6)
-            ws.insert_image(0, 1, str(logo), {
-                "x_offset": 2, "y_offset": 2,
+            ws.set_column(0, 0, 7)  # column A width for logo
+            ws.insert_image(0, 0, str(logo), {
+                "x_offset": 4, "y_offset": 3,     # nudge so borders are visible
                 "x_scale": 0.53, "y_scale": 0.53,
                 "object_position": 1
             })
 
-        # Titles in C..last (no inner borders)
+        # --- Titles in B..last (no inner borders in title area) ---
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
+
         title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
         subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
         red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
@@ -293,16 +295,17 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_col_0 = len(df.columns) - 1
         last_col_letter = col_letter(last_col_0)
 
-        ws.merge_range(0, 2, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
-        ws.merge_range(1, 2, 1, last_col_0, "", subtitle_fmt)
+        # Merge B1:Last and B2:Last (B == col index 1)
+        ws.merge_range(0, 1, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
+        ws.merge_range(1, 1, 1, last_col_0, "", subtitle_fmt)
         ws.write_rich_string(
-            1, 2,
+            1, 1,
             subtitle_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
             red_fmt, f"({date_str})",
             subtitle_fmt
         )
 
-        # Header (blue)
+        # --- Header row (blue) ---
         header_fmt = wb.add_format({
             "bold": True, "font_color": "white", "bg_color": "#305496",
             "align": "center", "valign": "vcenter", "text_wrap": True,
@@ -316,7 +319,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_row_0 = len(df) + 3
         last_excel_row = last_row_0 + 1
 
-        # Filters; no freeze panes (avoid gray line)
+        # Filters (no freeze panes to avoid the gray line)
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
         # Column widths
@@ -329,15 +332,15 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             if name in df.columns:
                 idx = df.columns.get_loc(name)
                 ws.set_column(idx, idx, width)
-        ws.set_column(df.columns.get_loc("% Enrolled of Funded"), df.columns.get_loc("% Enrolled of Funded"), 16)
+        pct_idx = df.columns.get_loc("% Enrolled of Funded")
+        ws.set_column(pct_idx, pct_idx, 16)
 
-        # Borders on header+data cells
+        # Borders on every header+data cell
         border_all = wb.add_format({"border": 1})
         ws.conditional_format(f"A4:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": border_all})
 
         # % display & colors
-        pct_idx = df.columns.get_loc("% Enrolled of Funded")
         pct_letter = col_letter(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
         ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100,
@@ -347,35 +350,37 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE",
                                           "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-        # Bold totals rows
+        # Bold totals rows (keeps borders)
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
-        # Thick outer box (row 1 → end)
-        first_row_excel = 1
+        # ===== Thick outer box from row 1 to the end =====
         top    = wb.add_format({"top": 2})
         bottom = wb.add_format({"bottom": 2})
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
+        # Top edge across A1..last
         ws.conditional_format(f"A1:{last_col_letter}1",
                               {"type": "formula", "criteria": "TRUE", "format": top})
-        ws.conditional_format(f"A{first_row_excel}:A{last_excel_row}",
+        # Left & right edges from row 1 to bottom
+        ws.conditional_format(f"A1:A{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": left})
-        ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}",
+        ws.conditional_format(f"{last_col_letter}1:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": right})
+        # Bottom edge at the end of the table
         ws.conditional_format(f"A{last_excel_row}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": bottom})
 
-        # Ensure edges are continuous across merged title area and spacer:
-        # Right edge on rows 1–3 last column
-        ws.write(0, last_col_0, "", wb.add_format({"right": 2, "top": 2}))
+        # --- Bulletproof the title-area edges (merged cells/images can skip CF drawing) ---
+        # Right edge on rows 1–3 (last column)
+        ws.write(0, last_col_0, "", wb.add_format({"right": 2, "top": 2}))  # top-right corner
         ws.write(1, last_col_0, "", wb.add_format({"right": 2}))
         ws.write(2, last_col_0, "", wb.add_format({"right": 2}))
-        # Left edge on rows 1–3 column A (top-left corner included)
-        ws.write(0, 0, "", wb.add_format({"left": 2, "top": 2}))
+        # Left edge on rows 1–3 (column A)
+        ws.write(0, 0, "", wb.add_format({"left": 2, "top": 2}))            # top-left corner
         ws.write(1, 0, "", wb.add_format({"left": 2}))
         ws.write(2, 0, "", wb.add_format({"left": 2}))
 
@@ -412,4 +417,3 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
-
