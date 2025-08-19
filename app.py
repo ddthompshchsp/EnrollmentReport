@@ -41,8 +41,8 @@ with inp_c:
     process = st.button("Process & Download")
 
 # ----------------------------
-# Static Lic. Cap values (edit here if your caps change)
-# Keys use the same Center names as in your VF data (after the app’s cleaning).
+# Static Lic. Cap values (edit as needed)
+# Keys should match the cleaned center names that appear in the VF report.
 # ----------------------------
 LIC_CAPS = {
     "Alvarez-McAllen ISD": 138,
@@ -51,7 +51,6 @@ LIC_CAPS = {
     "Edinburg": 232,
     "Edinburg North": 147,
     "Escandon-McAllen ISD": 131,
-    "Farias-PSIA ISD": 153,       # if your data says PSJA, keep the next line and delete this one
     "Farias-PSJA ISD": 153,
     "Guerra-PSJA ISD": 144,
     "Guzman-Donna ISD": 373,
@@ -61,38 +60,34 @@ LIC_CAPS = {
     "Monte Alto-Monte Alto ISD": 100,
     "Palacios-PSJA ISD": 135,
     "Salinas-Mission CISD": 90,
-    "Sam Fordyce-La Joya ISD": 131,
-    "Sam Houston-McAllen ISD": 90,
+    "Sam Fordyce-La Joya ISD": 121,
+    "Sam Houston-McAllen ISD": 134,
     "San Carlos-Edinburg CISD": 105,
-    "San Juan-PSJA ISD": 180,
+    "San Juan-PSJA ISD": 182,
     "Seguin-La Joya ISD": 150,
     "Singleterry-Donna ISD": 130,
-    "Thigpen-Zavala-McAllen ISD": 119,
+    "Thigpen-Zavala-McAllen ISD": 136,
     "Wilson-McAllen ISD": 119,
 }
 
-# ----- name normalization & fuzzy match for caps -----
+# Robust name matching for Lic. Cap
 def _norm_key(s: str) -> str:
     if s is None:
         return ""
     s = str(s)
-    # remove “HCHSP -- ” and generic tokens found in names
     s = re.sub(r"^HCHSP --\s*", "", s, flags=re.I)
     s = re.sub(r"\b(head\s*start|elem(?:entary)?|isd|cisd|isd\.?)\b", "", s, flags=re.I)
     s = s.replace("&", "and")
     s = re.sub(r"[-–—_/]", " ", s)
-    s = re.sub(r"\s+", "", s, flags=re.M).lower()
+    s = re.sub(r"\s+", "", s).lower()
     return s
 
-CAPS_LOOKUP = {}
-for k, v in LIC_CAPS.items():
-    CAPS_LOOKUP[_norm_key(k)] = v
+CAPS_LOOKUP = {_norm_key(k): v for k, v in LIC_CAPS.items()}
 
 def cap_for_center(center: str):
     nk = _norm_key(center)
     if nk in CAPS_LOOKUP:
         return CAPS_LOOKUP[nk]
-    # fallback: contains/substring match
     for ck, cv in CAPS_LOOKUP.items():
         if ck in nk or nk in ck:
             return cv
@@ -173,7 +168,6 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     rows = []
     waitlist_totals = 0
     agency_classrooms_total = 0
-    agency_lic_cap_total = 0
 
     for center, group in merged.groupby("Center", sort=True):
         # Class rows
@@ -202,13 +196,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         waitlist_val = accepted_val if enrolled_sum > funded_sum else ""
         lacking_over = funded_sum - enrolled_sum
 
-        class_count = int(len(group))  # number of class rows for this center
+        class_count = int(len(group))  # number of class rows
         agency_classrooms_total += class_count
 
         lic_cap_val = cap_for_center(center)
-        if isinstance(lic_cap_val, (int, float)) and not pd.isna(lic_cap_val):
-            agency_lic_cap_total += int(lic_cap_val)
-
         if waitlist_val != "":
             waitlist_totals += waitlist_val
 
@@ -228,7 +219,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # Agency totals
+    # Agency totals (NO Lic. Cap here per your request)
     agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(counts["Applied"].sum())
@@ -240,7 +231,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         "Center": "Agency Total",
         "Class": "",
         "# Classrooms": agency_classrooms_total,
-        "Lic. Cap": (agency_lic_cap_total if agency_lic_cap_total > 0 else ""),
+        "Lic. Cap": "",  # <- leave blank
         "Funded": agency_funded,
         "Enrolled": agency_enrolled,
         "Applied": agency_applied,
@@ -261,7 +252,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 # Excel Writer (logo at B1, titles in C..last, thick outer box from row 1)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Logo at B1 (53% scale); titles with no inner lines; thick outer box from row 1 (right edge fixed); borders on table; gridlines outside kept."""
+    """Logo at B1 (53% scale); titles with no inner lines; thick outer box from row 1; borders on table; gridlines outside kept; explicit edges on rows 1–3."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -278,11 +269,11 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.hide_gridlines(0)
 
         # Title area heights
-        ws.set_row(0, 24)
-        ws.set_row(1, 22)
-        ws.set_row(2, 20)
+        ws.set_row(0, 24)  # title
+        ws.set_row(1, 22)  # subtitle
+        ws.set_row(2, 20)  # spacer
 
-        # Logo at B1 (53%)
+        # Logo at B1 (53% scale)
         logo = Path("header_logo.png")
         if logo.exists():
             ws.set_column(1, 1, 6)
@@ -325,7 +316,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_row_0 = len(df) + 3
         last_excel_row = last_row_0 + 1
 
-        # Filters (no freeze panes)
+        # Filters; no freeze panes (avoid gray line)
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
         # Column widths
@@ -362,7 +353,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
-        # Thick outer box (row 1 → end) + explicit right edge on title rows
+        # Thick outer box (row 1 → end)
         first_row_excel = 1
         top    = wb.add_format({"top": 2})
         bottom = wb.add_format({"bottom": 2})
@@ -378,10 +369,15 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(f"A{last_excel_row}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": bottom})
 
-        # Force right border on rows 1–3 last column to cover merges/spacer
+        # Ensure edges are continuous across merged title area and spacer:
+        # Right edge on rows 1–3 last column
         ws.write(0, last_col_0, "", wb.add_format({"right": 2, "top": 2}))
         ws.write(1, last_col_0, "", wb.add_format({"right": 2}))
         ws.write(2, last_col_0, "", wb.add_format({"right": 2}))
+        # Left edge on rows 1–3 column A (top-left corner included)
+        ws.write(0, 0, "", wb.add_format({"left": 2, "top": 2}))
+        ws.write(1, 0, "", wb.add_format({"left": 2}))
+        ws.write(2, 0, "", wb.add_format({"left": 2}))
 
     return output.getvalue()
 
@@ -395,7 +391,6 @@ if process and vf_file and aa_file:
 
         vf_tidy = parse_vf(vf_raw)
         aa_counts = parse_applied_accepted(aa_raw)
-
         final_df = build_output_table(vf_tidy, aa_counts)
 
         st.success("Preview below. Use the download button to get the Excel file.")
@@ -417,3 +412,4 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
