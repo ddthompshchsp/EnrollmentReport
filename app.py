@@ -34,9 +34,6 @@ st.divider()
 # ----------------------------
 # Inputs
 # ----------------------------
-vf_file = None
-aa_file = None
-process = False
 inp_l, inp_c, inp_r = st.columns([1, 2, 1])
 with inp_c:
     vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
@@ -78,10 +75,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Parse Applied/Accepted (header=None) to per-center counts.
-    KEEP ONLY rows with a BLANK 'ST: Status End Date' (NaN or empty/whitespace).
-    """
+    """Parse Applied/Accepted (header=None) to per-center counts; only blank 'ST: Status End Date' rows kept."""
     header_row_idx = aa_df_raw.index[aa_df_raw.iloc[:, 0].astype(str).str.startswith("ST: Participant PID", na=False)]
     if len(header_row_idx) == 0:
         raise ValueError("Could not find header row in Applied/Accepted report (expected a row starting with 'ST: Participant PID').")
@@ -100,27 +94,14 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     counts = body.groupby(center_col)[status_col].value_counts().unstack(fill_value=0)
     for c in ["Accepted", "Applied"]:
-        if c not in counts.columns:
-            counts[c] = 0
+        if c not in counts.columns: counts[c] = 0
 
-    counts = counts[["Accepted", "Applied"]].astype(int).reset_index().rename(columns={center_col: "Center"})
-    return counts
+    return counts[["Accepted", "Applied"]].astype(int).reset_index().rename(columns={center_col: "Center"})
 
 # ----------------------------
 # Builder
 # ----------------------------
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
-    """
-    Class rows: keep Applied/Accepted/Lacking/Overage/Waitlist blank.
-    Center totals:
-      - Accepted = center Accepted
-      - Applied  = center Applied
-      - Waitlist = Accepted if Enrolled > Funded, else blank
-      - Lacking/Overage = Funded - Enrolled (can be negative)
-    Agency total:
-      - Waitlist = sum of center total Waitlists
-      - Lacking/Overage = Funded - Enrolled
-    """
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
     merged["% Enrolled of Funded"] = np.where(
         merged["Funded"] > 0,
@@ -135,77 +116,60 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     waitlist_totals = 0
 
     for center, group in merged.groupby("Center", sort=True):
-        # Class rows
+        # class rows
         for _, r in group.iterrows():
             rows.append({
-                "Center": r["Center"],
-                "Class": r["Class"],
-                "Funded": int(r["Funded"]),
-                "Enrolled": int(r["Enrolled"]),
-                "Applied": "",
-                "Accepted": "",
-                "Lacking/Overage": "",
-                "Waitlist": "",
+                "Center": r["Center"], "Class": r["Class"],
+                "Funded": int(r["Funded"]), "Enrolled": int(r["Enrolled"]),
+                "Applied": "", "Accepted": "", "Lacking/Overage": "", "Waitlist": "",
                 "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
             })
 
-        # Center totals
-        funded_sum = int(group["Funded"].sum())
+        # center totals
+        funded_sum   = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
-        pct_total = int(round(enrolled_sum / funded_sum * 100, 0)) if funded_sum > 0 else pd.NA
-
+        pct_total    = int(round(enrolled_sum / funded_sum * 100, 0)) if funded_sum > 0 else pd.NA
         accepted_val = int(accepted_by_center.get(center, 0))
-        applied_val = int(applied_by_center.get(center, 0))
+        applied_val  = int(applied_by_center.get(center, 0))
         waitlist_val = accepted_val if enrolled_sum > funded_sum else ""
-        lacking_overage_val = funded_sum - enrolled_sum
-        if waitlist_val != "":
-            waitlist_totals += waitlist_val
+        lacking_over = funded_sum - enrolled_sum
+        if waitlist_val != "": waitlist_totals += waitlist_val
 
         rows.append({
-            "Center": f"{center} Total",
-            "Class": "",
-            "Funded": funded_sum,
-            "Enrolled": enrolled_sum,
-            "Applied": applied_val,
-            "Accepted": accepted_val,
-            "Lacking/Overage": lacking_overage_val,
-            "Waitlist": waitlist_val,
+            "Center": f"{center} Total", "Class": "",
+            "Funded": funded_sum, "Enrolled": enrolled_sum,
+            "Applied": applied_val, "Accepted": accepted_val,
+            "Lacking/Overage": lacking_over, "Waitlist": waitlist_val,
             "% Enrolled of Funded": pct_total
         })
 
     final = pd.DataFrame(rows)
 
-    # Agency totals
+    # agency totals
     agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(counts["Applied"].sum())
     agency_accepted = int(counts["Accepted"].sum())
     agency_pct      = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
-    agency_lacking_overage = agency_funded - agency_enrolled
+    agency_lacking  = agency_funded - agency_enrolled
 
     final = pd.concat([final, pd.DataFrame([{
-        "Center": "Agency Total",
-        "Class": "",
-        "Funded": agency_funded,
-        "Enrolled": agency_enrolled,
-        "Applied": agency_applied,
-        "Accepted": agency_accepted,
-        "Lacking/Overage": agency_lacking_overage,
-        "Waitlist": waitlist_totals,
+        "Center": "Agency Total", "Class": "",
+        "Funded": agency_funded, "Enrolled": agency_enrolled,
+        "Applied": agency_applied, "Accepted": agency_accepted,
+        "Lacking/Overage": agency_lacking, "Waitlist": waitlist_totals,
         "% Enrolled of Funded": agency_pct
     }])], ignore_index=True)
 
-    # Final column order
-    final = final[[
+    return final[[
         "Center","Class","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
     ]]
-    return final
 
 # ----------------------------
-# Excel Writer (logo 53% scale, clean titles, thick outer box to row 1, no freeze line)
+# Excel Writer (logo to B, titles in C..last, thick outer box up to row 1)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Logo at A1 (53% scale); titles with NO inner lines; thick outer box (row 1 → end) with right edge reaching row 1; borders on header+data; gridlines outside kept."""
+    """Logo at B1 (53% scale), titles centered in C..last with no inner lines; thick outer box from row 1 (right edge fixed); borders on table; gridlines outside kept."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -219,50 +183,44 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         wb = writer.book
         ws = writer.sheets["Head Start Enrollment"]
 
-        # Keep Excel gridlines visible outside the table
+        # keep Excel gridlines outside
         ws.hide_gridlines(0)
 
-        # Size the first three rows for the logo/title area
-        ws.set_row(0, 24)  # title
-        ws.set_row(1, 22)  # subtitle
-        ws.set_row(2, 20)  # spacer above header
+        # title area heights
+        ws.set_row(0, 24)
+        ws.set_row(1, 22)
+        ws.set_row(2, 20)
 
-        # ----- Insert logo at A1 with Scale 53% (≈ 0.79" x 0.92") -----
+        # --- Logo at B1 (53% scale) ---
         logo = Path("header_logo.png")
         if logo.exists():
-            ws.set_column(0, 0, 6)  # logo column width
-            ws.insert_image(0, 0, str(logo), {
+            ws.set_column(1, 1, 6)  # column B width for logo
+            ws.insert_image(0, 1, str(logo), {
                 "x_offset": 2, "y_offset": 2,
                 "x_scale": 0.53, "y_scale": 0.53,
                 "object_position": 1
             })
 
-        # ----- Titles (no inner lines; add thick RIGHT (and TOP on title) so outer box reaches row 1) -----
+        # --- Titles in C..last (no inner borders) ---
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
-
-        title_fmt = wb.add_format({
-            "bold": True, "font_size": 14, "align": "center",
-            "top": 2, "right": 2   # ensure right edge at row 1
-        })
-        subtitle_box_fmt = wb.add_format({
-            "align": "center",
-            "right": 2             # continue right edge through row 2
-        })
-        subtitle_text_fmt = wb.add_format({"bold": True, "font_size": 12})
+        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
+        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
         red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
 
-        # Merge B1:Last for title & B2:Last for subtitle (logo is in column A)
-        ws.merge_range(0, 1, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
-        ws.merge_range(1, 1, 1, len(df.columns)-1, "", subtitle_box_fmt)
-        ws.write_rich_string(
-            1, 1,
-            subtitle_text_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
+        last_col_0 = len(df.columns) - 1
+        last_col_letter = col_letter(last_col_0)
+
+        # merge titles starting at column C (index 2)
+        ws.merge_range(0, 2, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
+        ws.merge_range(1, 2, 1, last_col_0, "", subtitle_fmt)
+        ws.write_rich_string(1, 2,
+            subtitle_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
             red_fmt, f"({date_str})",
-            subtitle_box_fmt
+            subtitle_fmt
         )
 
-        # ----- Header (blue) -----
+        # --- Header (blue) ---
         header_fmt = wb.add_format({
             "bold": True, "font_color": "white", "bg_color": "#305496",
             "align": "center", "valign": "vcenter", "text_wrap": True,
@@ -272,68 +230,58 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
-        # Geometry
+        # geometry
         last_row_0 = len(df) + 3
-        last_col_0 = len(df.columns) - 1
         last_excel_row = last_row_0 + 1
 
-        # Filters (keep). Freeze panes removed to avoid gray line across sheet.
+        # filters (no freeze panes)
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
-        # Column widths
-        widths = {
-            "Center": 28, "Class": 14, "Funded": 12, "Enrolled": 12,
-            "Applied": 12, "Accepted": 12, "Lacking/Overage": 14, "Waitlist": 12
-        }
+        # widths
+        widths = {"Center": 28, "Class": 14, "Funded": 12, "Enrolled": 12,
+                  "Applied": 12, "Accepted": 12, "Lacking/Overage": 14, "Waitlist": 12}
         for name, width in widths.items():
             if name in df.columns:
                 idx = df.columns.get_loc(name)
                 ws.set_column(idx, idx, width)
         ws.set_column(df.columns.get_loc("% Enrolled of Funded"), df.columns.get_loc("% Enrolled of Funded"), 16)
 
-        # Borders on every header+data cell
+        # borders on header+data cells
         border_all = wb.add_format({"border": 1})
-        table_range = f"A4:{col_letter(last_col_0)}{last_excel_row}"
-        ws.conditional_format(table_range, {"type": "formula", "criteria": "TRUE", "format": border_all})
+        ws.conditional_format(f"A4:{last_col_letter}{last_excel_row}", {"type": "formula", "criteria": "TRUE", "format": border_all})
 
-        # % display & colors
+        # % colors
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
         pct_letter = col_letter(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
-        ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100,
-                                          "format": wb.add_format({"font_color": "red"})})
-        ws.conditional_format(pct_range, {"type": "cell", "criteria": ">", "value": 100,
-                                          "format": wb.add_format({"font_color": "blue"})})
-        ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE",
-                                          "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
+        ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100, "format": wb.add_format({"font_color": "red"})})
+        ws.conditional_format(pct_range, {"type": "cell", "criteria": ">", "value": 100, "format": wb.add_format({"font_color": "blue"})})
+        ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE", "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-        # Bold totals rows
+        # bold totals
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
-        # ----- Thick outer box from row 1 to end -----
+        # === Thick outer box (row 1 → end). Fix right-edge on title rows explicitly. ===
         first_row_excel = 1
-        first_col_letter = "A"
-        last_col_letter = col_letter(last_col_0)
-
         top    = wb.add_format({"top": 2})
         bottom = wb.add_format({"bottom": 2})
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
-        # Top edge across A1..last column (covers over the logo column)
-        ws.conditional_format(f"{first_col_letter}1:{last_col_letter}1",
-                              {"type": "formula", "criteria": "TRUE", "format": top})
-        # Left and right edges from row 1 through the end
-        ws.conditional_format(f"{first_col_letter}{first_row_excel}:{first_col_letter}{last_excel_row}",
-                              {"type": "formula", "criteria": "TRUE", "format": left})
-        ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}",
-                              {"type": "formula", "criteria": "TRUE", "format": right})
-        # Bottom edge at end of table
-        ws.conditional_format(f"{first_col_letter}{last_excel_row}:{last_col_letter}{last_excel_row}",
-                              {"type": "formula", "criteria": "TRUE", "format": bottom})
+        # top edge across A1..last
+        ws.conditional_format(f"A1:{last_col_letter}1", {"type": "formula", "criteria": "TRUE", "format": top})
+        # sides from row 1 to bottom
+        ws.conditional_format(f"A{first_row_excel}:A{last_excel_row}", {"type": "formula", "criteria": "TRUE", "format": left})
+        ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}", {"type": "formula", "criteria": "TRUE", "format": right})
+        # bottom edge
+        ws.conditional_format(f"A{last_excel_row}:{last_col_letter}{last_excel_row}", {"type": "formula", "criteria": "TRUE", "format": bottom})
+
+        # ---- Explicit right border on title & subtitle last cell to reach row 1 cleanly ----
+        ws.write(0, last_col_0, "", wb.add_format({"right": 2, "top": 2}))  # row 1 last col
+        ws.write(1, last_col_0, "", wb.add_format({"right": 2}))            # row 2 last col
 
     return output.getvalue()
 
@@ -353,9 +301,7 @@ if process and vf_file and aa_file:
         preview_df = final_df.copy()
         pct_col = "% Enrolled of Funded"
         preview_df[pct_col] = preview_df[pct_col].apply(lambda v: "" if pd.isna(v) else f"{int(v)}%")
-        preview_df = preview_df[
-            ["Center","Class","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist",pct_col]
-        ]
+        preview_df = preview_df[["Center","Class","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist",pct_col]]
         st.dataframe(preview_df, use_container_width=True)
 
         xlsx_bytes = to_styled_excel(final_df)
@@ -367,4 +313,5 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
 
