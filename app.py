@@ -45,7 +45,7 @@ with inp_c:
 # Keys should match the cleaned center names that appear in the VF report.
 # ----------------------------
 LIC_CAPS = {
-  "Alvarez-McAllen ISD": 138,
+    "Alvarez-McAllen ISD": 138,
     "Camarena-La Joya ISD": 192,
     "Chapa-La Joya ISD": 154,
     "Edinburg": 232,
@@ -60,13 +60,13 @@ LIC_CAPS = {
     "Monte Alto-Monte Alto ISD": 100,
     "Palacios-PSJA ISD": 135,
     "Salinas-Mission CISD": 90,
-    "Sam Fordyce-La Joya ISD": 121,
-    "Sam Houston-McAllen ISD": 134,
+    "Sam Fordyce-La Joya ISD": 131,
+    "Sam Houston-McAllen ISD": 90,
     "San Carlos-Edinburg CISD": 105,
-    "San Juan-PSJA ISD": 182,
+    "San Juan-PSJA ISD": 180,
     "Seguin-La Joya ISD": 150,
     "Singleterry-Donna ISD": 130,
-    "Thigpen-Zavala-McAllen ISD": 136,
+    "Thigpen-Zavala-McAllen ISD": 119,
     "Wilson-McAllen ISD": 119,
 }
 
@@ -155,6 +155,18 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 # Builder
 # ----------------------------
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
+    """
+    - Class rows: keep # Classrooms/Lic. Cap/Applied/Accepted/Lacking/Overage/Waitlist blank
+    - Center totals:
+        * # Classrooms = number of class rows for that center
+        * Lic. Cap = from LIC_CAPS (blank if unknown)
+        * Waitlist = Accepted if Enrolled > Funded else blank
+        * Lacking/Overage = Funded - Enrolled (can be negative)
+    - Agency total:
+        * Lic. Cap blank
+        * Waitlist = sum of center waitlists
+        * Lacking/Overage = Funded - Enrolled
+    """
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
     merged["% Enrolled of Funded"] = np.where(
         merged["Funded"] > 0,
@@ -241,7 +253,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         "% Enrolled of Funded": agency_pct
     }])], ignore_index=True)
 
-    # Final column order
+    # Final column order (Waitlist AFTER Lacking/Overage)
     final = final[[
         "Center","Class","# Classrooms","Lic. Cap",
         "Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
@@ -249,10 +261,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (logo at A1, titles in B..last, thick outer box from row 1)
+# Excel Writer (logo at A1, titles in B..last, thick outer box from row 1, Named Range for Power BI)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Logo at A1 (53% scale); titles merged in B..last; thick outer box from row 1 (edges continuous across title); borders on table; gridlines outside kept."""
+    """Logo at A1 (53% scale); titles merged in B..last; thick outer box from row 1 (edges continuous across title); borders on table; gridlines outside kept; Named Range for PBI."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -319,6 +331,9 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_row_0 = len(df) + 3
         last_excel_row = last_row_0 + 1
 
+        # >>> Named range for Power BI (headers at A4)
+        wb.define_name("EnrollmentRange", f"='Head Start Enrollment'!$A$4:${last_col_letter}${last_excel_row}")
+
         # Filters (no freeze panes to avoid the gray line)
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
@@ -374,12 +389,10 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(f"A{last_excel_row}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": bottom})
 
-        # --- Bulletproof the title-area edges (merged cells/images can skip CF drawing) ---
-        # Right edge on rows 1–3 (last column)
+        # Bulletproof edges for merged title area (ensure corners/edges render)
         ws.write(0, last_col_0, "", wb.add_format({"right": 2, "top": 2}))  # top-right corner
         ws.write(1, last_col_0, "", wb.add_format({"right": 2}))
         ws.write(2, last_col_0, "", wb.add_format({"right": 2}))
-        # Left edge on rows 1–3 (column A)
         ws.write(0, 0, "", wb.add_format({"left": 2, "top": 2}))            # top-left corner
         ws.write(1, 0, "", wb.add_format({"left": 2}))
         ws.write(2, 0, "", wb.add_format({"left": 2}))
@@ -417,3 +430,4 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
