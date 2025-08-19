@@ -202,10 +202,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (logo, title boxed, borders on header+data, outer box, outside gridlines visible)
+# Excel Writer (logo 53% scale, clean title, outer box from row 1, no freeze-pane line)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Styled Excel: embedded logo on the left; titles boxed; blue header; all header+data cells bordered; outer box; gridlines outside the table remain visible."""
+    """Logo at A1 (53% scale), titles with NO inner lines, thick outer box (row 1 → end), borders on header+data, gridlines outside kept, no freeze-pane line."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -215,75 +215,63 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Data starts at row 4 (0-index 3)
         df.to_excel(writer, index=False, sheet_name="Head Start Enrollment", startrow=3)
         wb = writer.book
         ws = writer.sheets["Head Start Enrollment"]
 
-        # Keep normal Excel gridlines outside table
+        # Keep Excel gridlines visible outside the table
         ws.hide_gridlines(0)
 
-        # Row heights so the logo/title area looks like your example
+        # Size the first three rows for the logo/title area
         ws.set_row(0, 24)  # title
         ws.set_row(1, 22)  # subtitle
-        ws.set_row(2, 20)  # spacer before header
+        ws.set_row(2, 20)  # spacer above header
 
-        # ---------- Insert LOGO in A1 spanning ~rows 1–3 ----------
+        # ----- Insert logo at A1 with Scale 53% (≈ 0.79" x 0.92") -----
         logo = Path("header_logo.png")
         if logo.exists():
-            ws.set_column(0, 0, 6)  # width for logo column
+            ws.set_column(0, 0, 6)  # logo column width
             ws.insert_image(0, 0, str(logo), {
                 "x_offset": 2, "y_offset": 2,
-                "x_scale": 0.9, "y_scale": 0.9,
-                "object_position": 1  # move & size with cells
+                "x_scale": 0.53, "y_scale": 0.53,
+                "object_position": 1
             })
 
-        # ---------- Titles WITH borders and rich date ----------
+        # ----- Titles (NO borders in the title itself) -----
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
-
-        # Title (thick top + sides)
-        title_fmt = wb.add_format({
-            "bold": True, "font_size": 14, "align": "center",
-            "top": 2, "left": 2, "right": 2
-        })
-        # Subtitle box (thick sides, centered)
-        subtitle_box_fmt = wb.add_format({
-            "align": "center", "left": 2, "right": 2
-        })
-        subtitle_text_fmt = wb.add_format({"bold": True, "font_size": 12})
+        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
+        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
         red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
 
-        # Merge B1:Last for title & B2:Last for subtitle (logo sits in column A)
+        # Merge from column B to the last table column so logo sits in A
         ws.merge_range(0, 1, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
-        ws.merge_range(1, 1, 1, len(df.columns)-1, "", subtitle_box_fmt)
-
-        # Write rich subtitle text into B2 (use cell_format as LAST arg)
+        ws.merge_range(1, 1, 1, len(df.columns)-1, "", subtitle_fmt)
         ws.write_rich_string(
             1, 1,
-            subtitle_text_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
+            subtitle_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
             red_fmt, f"({date_str})",
-            subtitle_box_fmt
+            subtitle_fmt
         )
 
-        # ---------- Header (blue) ----------
+        # ----- Header (blue) -----
         header_fmt = wb.add_format({
             "bold": True, "font_color": "white", "bg_color": "#305496",
             "align": "center", "valign": "vcenter", "text_wrap": True,
-            "border": 1, "border_color": "black"
+            "border": 1
         })
         ws.set_row(3, 26)
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
         # Geometry
-        last_row_0 = len(df) + 3         # last 0-based row with data
+        last_row_0 = len(df) + 3
         last_col_0 = len(df.columns) - 1
-        last_excel_row = last_row_0 + 1  # convert to 1-based index
+        last_excel_row = last_row_0 + 1
 
-        # Filters + freeze header
+        # Filters (kept). Freeze panes removed (that gray line).
         ws.autofilter(3, 0, last_row_0, last_col_0)
-        ws.freeze_panes(4, 0)
+        # ws.freeze_panes(4, 0)  # <- removed to avoid line across entire sheet
 
         # Column widths
         widths = {
@@ -296,12 +284,12 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
                 ws.set_column(idx, idx, width)
         ws.set_column(df.columns.get_loc("% Enrolled of Funded"), df.columns.get_loc("% Enrolled of Funded"), 16)
 
-        # ---------- Borders on EVERY header+data cell ----------
+        # Borders on every header+data cell
         border_all = wb.add_format({"border": 1})
         table_range = f"A4:{col_letter(last_col_0)}{last_excel_row}"
         ws.conditional_format(table_range, {"type": "formula", "criteria": "TRUE", "format": border_all})
 
-        # ---------- % column display & colors ----------
+        # % display & colors
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
         pct_letter = col_letter(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
@@ -312,14 +300,14 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE",
                                           "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-        # ---------- Bold totals rows ----------
+        # Bold totals rows
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
-        # ---------- Thick outer box around titles + header + data ----------
-        first_row_excel = 1  # include titles
+        # ----- Thick outer box from row 1 to end (no lines inside title) -----
+        first_row_excel = 1
         first_col_letter = "A"
         last_col_letter = col_letter(last_col_0)
 
@@ -328,16 +316,17 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
-        # Draw the top edge across A1 (over the logo column) to avoid any gap
+        # Top edge across A1..last_col (covers over the logo column)
         ws.conditional_format(f"{first_col_letter}1:{last_col_letter}1",
                               {"type": "formula", "criteria": "TRUE", "format": top})
-        # Bottom + sides
-        ws.conditional_format(f"{first_col_letter}{last_excel_row}:{last_col_letter}{last_excel_row}",
-                              {"type": "formula", "criteria": "TRUE", "format": bottom})
+        # Side edges from row 1 (so they reach the title) down through the table
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{first_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": left})
         ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": right})
+        # Bottom edge at end of table
+        ws.conditional_format(f"{first_col_letter}{last_excel_row}:{last_col_letter}{last_excel_row}",
+                              {"type": "formula", "criteria": "TRUE", "format": bottom})
 
     return output.getvalue()
 
