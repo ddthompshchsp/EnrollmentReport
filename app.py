@@ -197,17 +197,17 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         "% Enrolled of Funded": agency_pct
     }])], ignore_index=True)
 
-    # Final column order (Lacking/Overage before Waitlist)
+    # Final column order
     final = final[[
         "Center","Class","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
     ]]
     return final
 
 # ----------------------------
-# Excel Writer (all borders + thick outer box)
+# Excel Writer
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Styled Excel with black borders on all cells + thick outer box; keeps blue header, titles, filters, freeze, % rules."""
+    """Styled Excel with black borders on all cells + thick outer box; bolds Center/Agency Total rows."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -217,14 +217,13 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Data start at row 4 (0-based index 3) so rows 1–2 are titles, row 4 is header
         df.to_excel(writer, index=False, sheet_name="Formatted", startrow=3)
         wb = writer.book
         ws = writer.sheets["Formatted"]
 
-        ws.hide_gridlines(2)  # hide default faint grid
+        ws.hide_gridlines(2)
 
-        # Titles (borders so they're part of the table grid)
+        # Titles
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
         title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center", "border": 1})
@@ -232,7 +231,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, f"2025-2026 Campus Classroom Enrollment — {date_str}", subtitle_fmt)
 
-        # Header bar (blue) with borders
+        # Header
         header_fmt = wb.add_format({
             "bold": True, "font_color": "white", "bg_color": "#305496",
             "align": "center", "valign": "vcenter", "text_wrap": True,
@@ -242,23 +241,21 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
-        # Ranges
-        last_row_0 = len(df) + 3          # last 0-based row with data
+        last_row_0 = len(df) + 3
         last_col_0 = len(df.columns) - 1
-
-        # Filters + freeze header
         ws.autofilter(3, 0, last_row_0, last_col_0)
         ws.freeze_panes(4, 0)
 
-        # Base cell formats (all with black borders)
+        # Formats
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
         pct_fmt = wb.add_format({'num_format': '0"%"', 'align': 'center', "border": 1})
         int_fmt = wb.add_format({'num_format': '0', 'align': 'right', "border": 1})
         text_fmt = wb.add_format({'align': 'left', "border": 1})
+        bold_fmt = wb.add_format({'bold': True, "border": 1})  # bold totals with borders
 
-        # Column widths & default formats (applies borders to every body cell)
-        ws.set_column(0, 0, 28, text_fmt)  # Center
-        ws.set_column(1, 1, 14, text_fmt)  # Class
+        # Columns
+        ws.set_column(0, 0, 28, text_fmt)
+        ws.set_column(1, 1, 14, text_fmt)
         for name, width in [
             ("Funded", 12), ("Enrolled", 12), ("Applied", 12),
             ("Accepted", 12), ("Lacking/Overage", 14), ("Waitlist", 12)
@@ -268,9 +265,9 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
                 ws.set_column(idx, idx, width, int_fmt)
         ws.set_column(pct_idx, pct_idx, 16, pct_fmt)
 
-        # % conditional colors (kept)
-        first_data_excel = 5             # first data row number (after header row 4)
-        last_excel_row = last_row_0 + 1  # convert to 1-based Excel row index
+        # % conditional colors
+        first_data_excel = 5
+        last_excel_row = last_row_0 + 1
         pct_letter = col_letter(pct_idx)
         pct_range = f"{pct_letter}{first_data_excel}:{pct_letter}{last_excel_row}"
         ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100,
@@ -278,10 +275,13 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(pct_range, {"type": "cell", "criteria": ">", "value": 100,
                                           "format": wb.add_format({"font_color": "blue", "border": 1})})
 
-        # ----------------------------
-        # Thick outer box around titles + header + data
-        # ----------------------------
-        first_row_excel = 1                  # include title row 1
+        # Bold totals rows
+        for ridx, val in enumerate(df["Center"].tolist()):
+            if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
+                ws.set_row(ridx + 4, None, bold_fmt)
+
+        # Outer box
+        first_row_excel = 1
         first_col_letter = "A"
         last_col_letter = col_letter(last_col_0)
 
@@ -290,16 +290,12 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
-        # Top line
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{last_col_letter}{first_row_excel}",
                               {"type": "formula", "criteria": "TRUE", "format": top})
-        # Bottom line (last data row)
         ws.conditional_format(f"{first_col_letter}{last_excel_row}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": bottom})
-        # Left edge
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{first_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": left})
-        # Right edge
         ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": right})
 
@@ -317,7 +313,6 @@ if process and vf_file and aa_file:
         aa_counts = parse_applied_accepted(aa_raw)
         final_df = build_output_table(vf_tidy, aa_counts)
 
-        # Preview (render % with % sign; reorder to match final)
         st.success("Preview below. Use the download button to get the Excel file.")
         preview_df = final_df.copy()
         pct_col = "% Enrolled of Funded"
@@ -327,7 +322,6 @@ if process and vf_file and aa_file:
         ]
         st.dataframe(preview_df, use_container_width=True)
 
-        # Export
         xlsx_bytes = to_styled_excel(final_df)
         st.download_button(
             "Download Formatted Excel",
@@ -337,3 +331,4 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
