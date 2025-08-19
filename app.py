@@ -202,10 +202,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (logo 53% scale, clean title, outer box from row 1, no freeze-pane line)
+# Excel Writer (logo 53% scale, clean titles, thick outer box to row 1, no freeze line)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Logo at A1 (53% scale), titles with NO inner lines, thick outer box (row 1 → end), borders on header+data, gridlines outside kept, no freeze-pane line."""
+    """Logo at A1 (53% scale); titles with NO inner lines; thick outer box (row 1 → end) with right edge reaching row 1; borders on header+data; gridlines outside kept."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -237,21 +237,29 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
                 "object_position": 1
             })
 
-        # ----- Titles (NO borders in the title itself) -----
+        # ----- Titles (no inner lines; add thick RIGHT (and TOP on title) so outer box reaches row 1) -----
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
-        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
-        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
+
+        title_fmt = wb.add_format({
+            "bold": True, "font_size": 14, "align": "center",
+            "top": 2, "right": 2   # ensure right edge at row 1
+        })
+        subtitle_box_fmt = wb.add_format({
+            "align": "center",
+            "right": 2             # continue right edge through row 2
+        })
+        subtitle_text_fmt = wb.add_format({"bold": True, "font_size": 12})
         red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
 
-        # Merge from column B to the last table column so logo sits in A
+        # Merge B1:Last for title & B2:Last for subtitle (logo is in column A)
         ws.merge_range(0, 1, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
-        ws.merge_range(1, 1, 1, len(df.columns)-1, "", subtitle_fmt)
+        ws.merge_range(1, 1, 1, len(df.columns)-1, "", subtitle_box_fmt)
         ws.write_rich_string(
             1, 1,
-            subtitle_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
+            subtitle_text_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
             red_fmt, f"({date_str})",
-            subtitle_fmt
+            subtitle_box_fmt
         )
 
         # ----- Header (blue) -----
@@ -269,9 +277,8 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_col_0 = len(df.columns) - 1
         last_excel_row = last_row_0 + 1
 
-        # Filters (kept). Freeze panes removed (that gray line).
+        # Filters (keep). Freeze panes removed to avoid gray line across sheet.
         ws.autofilter(3, 0, last_row_0, last_col_0)
-        # ws.freeze_panes(4, 0)  # <- removed to avoid line across entire sheet
 
         # Column widths
         widths = {
@@ -306,7 +313,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
-        # ----- Thick outer box from row 1 to end (no lines inside title) -----
+        # ----- Thick outer box from row 1 to end -----
         first_row_excel = 1
         first_col_letter = "A"
         last_col_letter = col_letter(last_col_0)
@@ -316,10 +323,10 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
-        # Top edge across A1..last_col (covers over the logo column)
+        # Top edge across A1..last column (covers over the logo column)
         ws.conditional_format(f"{first_col_letter}1:{last_col_letter}1",
                               {"type": "formula", "criteria": "TRUE", "format": top})
-        # Side edges from row 1 (so they reach the title) down through the table
+        # Left and right edges from row 1 through the end
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{first_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": left})
         ws.conditional_format(f"{last_col_letter}{first_row_excel}:{last_col_letter}{last_excel_row}",
