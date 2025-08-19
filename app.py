@@ -111,8 +111,6 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge class rows with center counts; add Center Totals and Agency Total.
-
     Class rows: keep Applied/Accepted/Lacking/Overage/Waitlist blank.
     Center totals:
       - Accepted = center Accepted
@@ -204,10 +202,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (clean titles, ALL borders on header+data, fixed outer box)
+# Excel Writer (title boxed, borders on header+data, outer box, outside gridlines visible)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Styled Excel: blue header; titles with no inner lines; ALL header+data cells bordered; thick outer box around whole table."""
+    """Styled Excel: titles boxed; blue header; ALL header+data cells bordered; thick outer box; gridlines outside table remain visible."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -218,17 +216,28 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         # Write data starting at row 4 (0-index 3)
-        df.to_excel(writer, index=False, sheet_name="Formatted", startrow=3)
+        df.to_excel(writer, index=False, sheet_name="Head Start Enrollment", startrow=3)
         wb = writer.book
-        ws = writer.sheets["Formatted"]
+        ws = writer.sheets["Head Start Enrollment"]
 
-        ws.hide_gridlines(2)  # hide faint Excel grid
+        # Keep normal Excel gridlines outside table
+        ws.hide_gridlines(0)
 
-        # ---------- Titles (NO borders to avoid random lines) ----------
+        # ---------- Titles WITH their own borders (fixes gap at top) ----------
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
-        title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
-        subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
+
+        # Title: thick top + sides
+        title_fmt = wb.add_format({
+            "bold": True, "font_size": 14, "align": "center",
+            "top": 2, "left": 2, "right": 2
+        })
+        # Subtitle: thick sides (bottom joins header/table)
+        subtitle_fmt = wb.add_format({
+            "bold": True, "font_size": 12, "align": "center",
+            "left": 2, "right": 2
+        })
+
         ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 0, 1, len(df.columns)-1, f"2025-2026 Campus Classroom Enrollment — {date_str}", subtitle_fmt)
 
@@ -251,7 +260,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.autofilter(3, 0, last_row_0, last_col_0)
         ws.freeze_panes(4, 0)
 
-        # ---------- Column widths (NO default formats here) ----------
+        # Column widths
         widths = {
             "Center": 28, "Class": 14, "Funded": 12, "Enrolled": 12,
             "Applied": 12, "Accepted": 12, "Lacking/Overage": 14, "Waitlist": 12
@@ -260,42 +269,15 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             if name in df.columns:
                 idx = df.columns.get_loc(name)
                 ws.set_column(idx, idx, width)
+        ws.set_column(df.columns.get_loc("% Enrolled of Funded"), df.columns.get_loc("% Enrolled of Funded"), 16)
 
-        # ---------- Cell formats ----------
-        pct_idx = df.columns.get_loc("% Enrolled of Funded")
-        pct_fmt  = wb.add_format({'num_format': '0"%"', 'align': 'center'})
-        num_fmt  = wb.add_format({'num_format': '0', 'align': 'right'})
-        text_fmt = wb.add_format({'align': 'left'})
-
-        # Apply number/text formats to body cells (so values are aligned correctly)
-        for r in range(4, last_row_0 + 1):  # data rows only
-            ws.set_row(r, None)  # keep default height
-        # Set % column width/format separately
-        ws.set_column(pct_idx, pct_idx, 16)
-
-        # ---------- One pass: add black borders to EVERY header+data cell ----------
+        # ---------- Borders on EVERY header+data cell (single pass) ----------
         border_all = wb.add_format({"border": 1})
-        data_range = f"A4:{col_letter(last_col_0)}{last_excel_row}"
-        ws.conditional_format(data_range, {"type": "formula", "criteria": "TRUE", "format": border_all})
+        table_range = f"A4:{col_letter(last_col_0)}{last_excel_row}"
+        ws.conditional_format(table_range, {"type": "formula", "criteria": "TRUE", "format": border_all})
 
-        # ---------- Write number formats over data range (without removing borders) ----------
-        # Do this via conditional formats that add alignment/num_format but keep borders from above
-        # Center & Class columns (text align left)
-        text_cols = [df.columns.get_loc("Center"), df.columns.get_loc("Class")]
-        text_fmt_cf = wb.add_format({"align": "left"})
-        for ci in text_cols:
-            rng = f"{col_letter(ci)}5:{col_letter(ci)}{last_excel_row}"
-            ws.conditional_format(rng, {"type": "formula", "criteria": "TRUE", "format": text_fmt_cf})
-
-        # Numeric columns (right align)
-        num_cols = [c for c in ["Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist"] if c in df.columns]
-        num_fmt_cf = wb.add_format({"align": "right", "num_format": "0"})
-        for name in num_cols:
-            ci = df.columns.get_loc(name)
-            rng = f"{col_letter(ci)}5:{col_letter(ci)}{last_excel_row}"
-            ws.conditional_format(rng, {"type": "formula", "criteria": "TRUE", "format": num_fmt_cf})
-
-        # % column display
+        # ---------- % column display & colors ----------
+        pct_idx = df.columns.get_loc("% Enrolled of Funded")
         pct_letter = col_letter(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
         ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100,
@@ -305,14 +287,14 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE",
                                           "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-        # ---------- Bold totals rows (keeps borders) ----------
+        # ---------- Bold totals rows ----------
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
         # ---------- Thick outer box around titles + header + data ----------
-        first_row_excel = 1  # include title row 1
+        first_row_excel = 1  # include title row
         first_col_letter = "A"
         last_col_letter = col_letter(last_col_0)
 
@@ -321,9 +303,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
-        # Top, Bottom, Left, Right edges
-        ws.conditional_format(f"{first_col_letter}{first_row_excel}:{last_col_letter}{first_row_excel}",
-                              {"type": "formula", "criteria": "TRUE", "format": top})
+        # We already drew a thick top on the title; keep side & bottom lines here
         ws.conditional_format(f"{first_col_letter}{last_excel_row}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": bottom})
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{first_col_letter}{last_excel_row}",
@@ -363,4 +343,5 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
 
