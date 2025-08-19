@@ -9,7 +9,7 @@ import streamlit as st
 st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
 
 # ----------------------------
-# Header
+# Header (Streamlit UI only)
 # ----------------------------
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
@@ -202,10 +202,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (title boxed, borders on header+data, outer box, outside gridlines visible)
+# Excel Writer (logo, title boxed, borders on header+data, outer box, outside gridlines visible)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Styled Excel: titles boxed; blue header; ALL header+data cells bordered; thick outer box; gridlines outside table remain visible."""
+    """Styled Excel: embedded logo on the left spanning ~3 rows; titles boxed; blue header; ALL header+data cells bordered; thick outer box; outside gridlines visible."""
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -215,7 +215,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Write data starting at row 4 (0-index 3)
+        # Data starts at row 4 (0-index 3)
         df.to_excel(writer, index=False, sheet_name="Head Start Enrollment", startrow=3)
         wb = writer.book
         ws = writer.sheets["Head Start Enrollment"]
@@ -223,7 +223,26 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         # Keep normal Excel gridlines outside table
         ws.hide_gridlines(0)
 
-        # ---------- Titles WITH their own borders (fixes gap at top) ----------
+        # Give the first three rows a bit of height so the logo fits nicely
+        ws.set_row(0, 24)  # Title row
+        ws.set_row(1, 22)  # Subtitle row
+        ws.set_row(2, 20)  # Spacer row (above header)
+
+        # ---------- Insert LOGO on the left, spanning ~3 rows ----------
+        logo = Path("header_logo.png")
+        if logo.exists():
+            # Make column A a bit wider for the logo footprint (tweak as needed)
+            # (This doesn't affect your table since header starts at row 4.)
+            ws.set_column(0, 0, 6)  # ~6 characters wide
+
+            # Place at A1. Scale to roughly fill rows 1–3 height.
+            ws.insert_image(0, 0, str(logo), {
+                "x_offset": 2, "y_offset": 2,
+                "x_scale": 0.9, "y_scale": 0.9,
+                "object_position": 1  # move & size with cells
+            })
+
+        # ---------- Titles WITH borders and rich date ----------
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
 
@@ -232,14 +251,26 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             "bold": True, "font_size": 14, "align": "center",
             "top": 2, "left": 2, "right": 2
         })
-        # Subtitle: thick sides (bottom joins header/table)
-        subtitle_fmt = wb.add_format({
-            "bold": True, "font_size": 12, "align": "center",
-            "left": 2, "right": 2
+        # Subtitle base: thick sides; we’ll write rich text to color the date red
+        subtitle_box_fmt = wb.add_format({
+            "align": "center", "left": 2, "right": 2
         })
+        subtitle_text_fmt = wb.add_format({"bold": True, "font_size": 12})
+        red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
 
-        ws.merge_range(0, 0, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
-        ws.merge_range(1, 0, 1, len(df.columns)-1, f"2025-2026 Campus Classroom Enrollment — {date_str}", subtitle_fmt)
+        # Merge ranges for title & subtitle
+        ws.merge_range(0, 1, 0, len(df.columns)-1, "Hidalgo County Head Start Program", title_fmt)
+        ws.merge_range(1, 1, 1, len(df.columns)-1, "", subtitle_box_fmt)  # merge first, then write rich string
+
+        # Rich subtitle: “Head Start – 2025–2026 Campus Classroom Enrollment as of (M.D.YY)”
+        ws.write_rich_string(
+            1, 1,
+            subtitle_text_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
+            red_fmt, f"({date_str})",
+            subtitle_text_fmt, "",
+        )
+        # Ensure the rich string is horizontally centered inside the merged range
+        ws.write(1, 1, ws.table[1][1], subtitle_box_fmt)  # no-op to keep box format on the merged region
 
         # ---------- Header (blue) ----------
         header_fmt = wb.add_format({
@@ -294,16 +325,15 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
                 ws.set_row(ridx + 4, None, bold_row)
 
         # ---------- Thick outer box around titles + header + data ----------
-        first_row_excel = 1  # include title row
+        first_row_excel = 1  # include titles
         first_col_letter = "A"
         last_col_letter = col_letter(last_col_0)
 
-        top    = wb.add_format({"top": 2})
         bottom = wb.add_format({"bottom": 2})
         left   = wb.add_format({"left": 2})
         right  = wb.add_format({"right": 2})
 
-        # We already drew a thick top on the title; keep side & bottom lines here
+        # Sides + bottom (top is already drawn by the title format)
         ws.conditional_format(f"{first_col_letter}{last_excel_row}:{last_col_letter}{last_excel_row}",
                               {"type": "formula", "criteria": "TRUE", "format": bottom})
         ws.conditional_format(f"{first_col_letter}{first_row_excel}:{first_col_letter}{last_excel_row}",
