@@ -1,7 +1,8 @@
 import io
 import re
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -41,7 +42,7 @@ with inp_c:
     process = st.button("Process & Download")
 
 # ----------------------------
-# Static Lic. Cap values 
+# Static Lic. Cap values
 # ----------------------------
 LIC_CAPS = {
     "Alvarez-McAllen ISD": 138,
@@ -69,7 +70,6 @@ LIC_CAPS = {
     "Wilson-McAllen ISD": 119,
 }
 
-# g for Lic. Cap
 def _norm_key(s: str) -> str:
     if s is None:
         return ""
@@ -260,10 +260,14 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer  Power BI)
+# Excel Writer (Power BI)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    """Logo at A1 (53% scale); titles merged in B..last; thick outer box from row 1 (edges continuous across title); borders on table; gridlines outside kept; Named Range for PBI."""
+    """
+    Logo at A1; titles merged in B..last; thick outer box from row 1 (continuous across title);
+    borders on table; gridlines outside kept; Named Range for PBI; freeze top 4 rows;
+    subtitle shows date and Central time in 12-hour format.
+    """
     def col_letter(n: int) -> str:
         s = ""
         while n >= 0:
@@ -290,14 +294,17 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         if logo.exists():
             ws.set_column(0, 0, 7)  # column A width for logo
             ws.insert_image(0, 0, str(logo), {
-                "x_offset": 4, "y_offset": 3,     # nudge so borders are visible
+                "x_offset": 4, "y_offset": 3,
                 "x_scale": 0.53, "y_scale": 0.53,
                 "object_position": 1
             })
 
-        # --- Titles
-        d = date.today()
-        date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
+        # --- Titles + Central timestamp ---
+        today = date.today()
+        date_str = f"{today.month}.{today.day}.{str(today.year % 100).zfill(2)}"
+        now_ct = datetime.now(ZoneInfo("America/Chicago"))
+        time_str = now_ct.strftime("%I:%M %p").lstrip("0")  # e.g., 8:05 PM
+        tz_abbr = now_ct.strftime("%Z")  # CST or CDT
 
         title_fmt = wb.add_format({"bold": True, "font_size": 14, "align": "center"})
         subtitle_fmt = wb.add_format({"bold": True, "font_size": 12, "align": "center"})
@@ -306,13 +313,12 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_col_0 = len(df.columns) - 1
         last_col_letter = col_letter(last_col_0)
 
-        # Merge B1:Last and B2:Last (B == col index 1)
         ws.merge_range(0, 1, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 1, 1, last_col_0, "", subtitle_fmt)
         ws.write_rich_string(
             1, 1,
             subtitle_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
-            red_fmt, f"({date_str})",
+            red_fmt, f"({date_str}, {time_str} {tz_abbr})",
             subtitle_fmt
         )
 
@@ -329,13 +335,14 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_row_0 = len(df) + 3
         last_excel_row = last_row_0 + 1
 
-      
+        # Named range for Power BI
         wb.define_name("EnrollmentRange", f"='Head Start Enrollment'!$A$4:${last_col_letter}${last_excel_row}")
 
-        # Filters (no freeze panes to avoid the gray line)
+        # Filters + Freeze panes (top 4 rows)
         ws.autofilter(3, 0, last_row_0, last_col_0)
+        ws.freeze_panes(4, 0)
 
-       
+        # Column widths
         widths = {
             "Center": 28, "Class": 14, "# Classrooms": 12, "Lic. Cap": 12,
             "Funded": 12, "Enrolled": 12, "Applied": 12, "Accepted": 12,
@@ -363,7 +370,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE",
                                           "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-  
+        # Bold center totals + agency total
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
@@ -428,4 +435,5 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
 
