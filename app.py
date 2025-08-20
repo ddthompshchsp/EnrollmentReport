@@ -41,8 +41,7 @@ with inp_c:
     process = st.button("Process & Download")
 
 # ----------------------------
-# Static Lic. Cap values (edit here if your caps change)
-# Keys should match the cleaned center names that appear in the VF report.
+# Static Lic. Cap values 
 # ----------------------------
 LIC_CAPS = {
     "Alvarez-McAllen ISD": 138,
@@ -261,7 +260,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     return final
 
 # ----------------------------
-# Excel Writer (logo at A1, titles in B..last, thick outer box from row 1, Named Range for Power BI)
+# Excel Writer  Power BI)
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
     """Logo at A1 (53% scale); titles merged in B..last; thick outer box from row 1 (edges continuous across title); borders on table; gridlines outside kept; Named Range for PBI."""
@@ -296,7 +295,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
                 "object_position": 1
             })
 
-        # --- Titles in B..last (no inner borders in title area) ---
+        # --- Titles
         d = date.today()
         date_str = f"{d.month}.{d.day}.{str(d.year % 100).zfill(2)}"
 
