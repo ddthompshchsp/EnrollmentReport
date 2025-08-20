@@ -69,7 +69,7 @@ LIC_CAPS = {
     "Wilson-McAllen ISD": 119,
 }
 
-# Robust name matching for Lic. Cap
+# g for Lic. Cap
 def _norm_key(s: str) -> str:
     if s is None:
         return ""
