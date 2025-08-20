@@ -326,17 +326,16 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         for c, col in enumerate(df.columns):
             ws.write(3, c, col, header_fmt)
 
-        # Geometry
         last_row_0 = len(df) + 3
         last_excel_row = last_row_0 + 1
 
-        # >>> Named range for Power BI (headers at A4)
+      
         wb.define_name("EnrollmentRange", f"='Head Start Enrollment'!$A$4:${last_col_letter}${last_excel_row}")
 
         # Filters (no freeze panes to avoid the gray line)
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
-        # Column widths
+       
         widths = {
             "Center": 28, "Class": 14, "# Classrooms": 12, "Lic. Cap": 12,
             "Funded": 12, "Enrolled": 12, "Applied": 12, "Accepted": 12,
@@ -364,7 +363,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE",
                                           "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-        # Bold totals rows (keeps borders)
+  
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
