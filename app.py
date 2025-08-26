@@ -24,7 +24,7 @@ vf_file   = st.file_uploader("VF funded report (.xlsx)", type=["xlsx"], key="vf"
 
 # ---------------- helpers ----------------
 PLACEHOLDER_ANY = re.compile(r"^\s*class(?:room)?\s*\d+\s*$", re.IGNORECASE)  # Class 30, Classroom 09, etc.
-ONLY_NUMERIC    = re.compile(r"^\s*\d+\s*$")                                  # 101, 030, etc.
+                           # 101, 030, etc.
 CLASS_TOTALS    = re.compile(r"^\s*class\s+totals\s*:?\s*$", re.IGNORECASE)
 
 def parse_vf_classes(vf_file) -> dict[str, list[str]]:
