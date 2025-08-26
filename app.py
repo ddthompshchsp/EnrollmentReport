@@ -216,3 +216,4 @@ if main_file and vf_file:
         st.download_button("📥 Download fixed workbook", f, file_name=out_path)
 
     st.success("Class names were overwritten from the VF funded report (letters preserved).")
+
