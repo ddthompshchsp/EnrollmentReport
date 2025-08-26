@@ -1,53 +1,89 @@
-# app.py — Force class names from VF funded report (letters preserved)
-import re
+# app.py — Get classes from VF funded report, assign to students (two-file solution)
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import re
+from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
-st.set_page_config(page_title="Fix Class Names from VF", layout="centered")
+st.set_page_config(page_title="Classes from VF (Two-File Upload)", layout="centered")
 
-st.title("Fix Class Names from VF funded report (letters preserved)")
+st.title("Assign Class Names from VF Funded Report")
 st.markdown(
-    "1) Upload your **Campus Classroom Enrollment** workbook (must contain columns **Center** and **Class**).\n"
-    "2) Upload the **VF funded report** (sheet with blocks like `HCHSP -- <Center>` and lines `Class E117`, `Class A01`, …).\n\n"
-    "**Result:** The **Class** column is replaced per center with the exact, lettered classes from the VF funded report.\n"
-    "No row reordering, no totals moved — just the class names fixed."
+    "Upload **(1)** your student QuickReport (no class column is fine) and **(2)** your **VF funded report**.  \n"
+    "The app will **pull class names from the VF report** and **assign them deterministically per center** "
+    "(round-robin by PID). Letters in class names (e.g., `E117`, `A01`) are preserved from VF."
 )
 
-main_file = st.file_uploader("Campus Classroom Enrollment (.xlsx)", type=["xlsx"], key="main")
-vf_file   = st.file_uploader("VF funded report (.xlsx)", type=["xlsx"], key="vf")
+students_file = st.file_uploader("1) Student QuickReport (.xlsx)", type=["xlsx"], key="students")
+vf_file       = st.file_uploader("2) VF funded report (.xlsx)", type=["xlsx"], key="vf")
 
-# ---------------- helpers ----------------
-PLACEHOLDER_ANY = re.compile(r"^\s*class(?:room)?\s*\d+\s*$", re.IGNORECASE)  # Class 30, Classroom 09, etc.
-                           # 101, 030, etc.
-CLASS_TOTALS    = re.compile(r"^\s*class\s+totals\s*:?\s*$", re.IGNORECASE)
+# ---------------- Helpers ----------------
 
-def parse_vf_classes(vf_file) -> dict[str, list[str]]:
+CLASS_TOTALS = re.compile(r"^\s*class\s+totals\s*:?\s*$", re.IGNORECASE)
+
+def find_header_row(ws, probes=("ST: Participant PID", "ST: Center Name"), scan_rows=120):
+    """Find the first row where ALL probe headers appear (case-insensitive) within that row."""
+    probes = [p.lower() for p in probes]
+    for r in ws.iter_rows(min_row=1, max_row=scan_rows):
+        vals = [str(c.value).strip().lower() if c.value is not None else "" for c in r]
+        if all(any(p == v for v in vals) for p in probes):
+            return r[0].row
+    return None
+
+def load_students_frame(xlsx) -> pd.DataFrame:
+    """Load student QuickReport: detect sheet + header row; must include ST: Participant PID and ST: Center Name."""
+    wb = load_workbook(xlsx, data_only=True)
+    chosen, hdr = None, None
+    for s in wb.sheetnames:
+        ws = wb[s]
+        hdr = find_header_row(ws)
+        if hdr:
+            chosen = s
+            break
+    if not chosen:
+        st.error("Couldn’t find a sheet in the student QuickReport containing both "
+                 "'ST: Participant PID' and 'ST: Center Name'.")
+        st.stop()
+    xlsx.seek(0)
+    df = pd.read_excel(xlsx, sheet_name=chosen, header=hdr-1, dtype=str)
+    # keep only relevant columns if present
+    keep = [c for c in df.columns if str(c).strip() in [
+        "ST: Participant PID", "ST: First Name", "ST: Last Name",
+        "ST: Center Name", "ST: Status", "ST: Status End Date"
+    ]]
+    if keep:
+        df = df[keep].copy()
+    return df
+
+def parse_vf_funded(xlsx) -> Dict[str, List[str]]:
     """
-    Parse the VF funded report: looks for lines 'HCHSP -- <Center>' then subsequent 'Class <CODE>'
-    lines. Accepts letters/digits, optional hyphens, optional embedded spaces (we normalize).
-    Returns mapping: center_text -> [class_codes_in_order]
+    Parse VF funded report into {center -> [class codes]}.
+    Looks for rows like:
+       HCHSP -- <Center Name>
+       Class E117
+       Class A01
+       ...
+    Normalizes inside the codes (e.g., 'E 117' -> 'E117', 'B -114' -> 'B-114').
     """
-    xls = pd.ExcelFile(vf_file)
-    # choose the likely sheet (name starts with 'VF_Average_Funded')
+    xls = pd.ExcelFile(xlsx)
+    # pick likely sheet (prefix match works with your files)
     sheet = next((s for s in xls.sheet_names if s.lower().startswith("vf_average_funded")), xls.sheet_names[0])
-    raw = pd.read_excel(vf_file, sheet_name=sheet, header=None)
+    raw = pd.read_excel(xlsx, sheet_name=sheet, header=None)
 
     center_re = re.compile(r'^\s*HCHSP\s*--\s*(.+?)\s*$', re.IGNORECASE)
-    class_re  = re.compile(r'^\s*Class\s+([A-Za-z0-9][A-Za-z0-9\s\-\/]*)\s*:?$', re.IGNORECASE)
+    class_re  = re.compile(r'^\s*Class\s+([A-Za-z0-9][A-Za-z0-9\s\-/]*)\s*:?$', re.IGNORECASE)
 
-    mapping: dict[str, list[str]] = {}
+    mapping: Dict[str, List[str]] = {}
     current = None
-    for v in raw.iloc[:, 0].astype(str).fillna(""):
-        line = v.strip()
-        if not line:
-            continue
-        if CLASS_TOTALS.match(line):
+    col0 = raw.iloc[:, 0].astype(str).fillna("")
+    for val in col0:
+        line = val.strip()
+        if not line or CLASS_TOTALS.match(line):
             continue
         m_center = center_re.match(line)
         if m_center:
@@ -56,135 +92,69 @@ def parse_vf_classes(vf_file) -> dict[str, list[str]]:
             continue
         m_class = class_re.match(line)
         if m_class and current:
-            cls = m_class.group(1).strip()
-            # normalize inside the code: 'E 117 ' -> 'E117', 'B -114' -> 'B-114'
-            cls = re.sub(r'\s*-\s*', '-', cls)  # tidy hyphen spacing
-            cls = re.sub(r'\s+', '', cls)       # remove spaces inside code
-            mapping[current].append(cls)
+            code = m_class.group(1).strip()
+            code = re.sub(r'\s*-\s*', '-', code)  # tidy hyphen spacing
+            code = re.sub(r'\s+', '', code)       # remove inner spaces
+            mapping[current].append(code)
     return mapping
 
-def find_header_row_by_cols(ws, must_have=("Center", "Class"), scan_rows=100):
-    must = [c.lower() for c in must_have]
-    for r in ws.iter_rows(min_row=1, max_row=scan_rows):
-        vals = [str(c.value).strip().lower() if c.value is not None else "" for c in r]
-        if all(any(m == v for v in vals) for m in must):
-            return r[0].row
-    return None
-
-def read_main_grid(main_file) -> tuple[pd.DataFrame, str]:
-    wb = load_workbook(main_file, data_only=True)
-    chosen, hdr = None, None
-    for s in wb.sheetnames:
-        ws = wb[s]
-        hdr = find_header_row_by_cols(ws)
-        if hdr:
-            chosen = s
-            break
-    if not chosen:
-        st.error("Couldn’t find a sheet with 'Center' and 'Class' headers.")
-        st.stop()
-    main_file.seek(0)
-    df = pd.read_excel(main_file, sheet_name=chosen, header=hdr-1)
-    return df, chosen
-
-def norm_center_for_match(x: str) -> str:
-    # normalize center names for matching across files
-    x = x.lower().strip()
-    x = re.sub(r'[\u2013\u2014\-]+', '-', x)            # normalize dashes
-    x = re.sub(r'[^a-z0-9\s\-]', '', x)                 # remove stray punctuation
+def norm_center(x: str) -> str:
+    """Normalize center strings so the two files match more easily."""
+    x = (x or "").lower().strip()
+    x = re.sub(r'[\u2013\u2014\-]+', '-', x)   # normalize dashes
+    x = re.sub(r'[^a-z0-9\s\-]', '', x)       # drop stray punctuation
     x = re.sub(r'\s+', ' ', x)
-    # common suffixes that often vary
-    x = x.replace(' isd', '').replace(' elementary', '').strip()
-    return x
+    # common suffixes
+    for tail in [" isd", " elementary", " elem", " school"]:
+        if x.endswith(tail):
+            x = x[: -len(tail)]
+    return x.strip()
 
-def map_centers(main_centers: list[str], vf_centers: list[str]) -> dict[str, str]:
-    """
-    Build a mapping from main center text -> VF center text using normalized matching.
-    Prefers exact normalized match; if none, tries 'contains' either way.
-    """
-    main_norm = {c: norm_center_for_match(c) for c in main_centers}
-    vf_norm   = {c: norm_center_for_match(c) for c in vf_centers}
-
-    # reverse index for VF
-    rev = {}
-    for orig, n in vf_norm.items():
+def build_center_map(student_centers: List[str], vf_centers: List[str]) -> Dict[str, str]:
+    """Map student center strings -> VF funded center strings (normalized exact or contains)."""
+    s_norm = {s: norm_center(s) for s in student_centers}
+    v_norm = {v: norm_center(v) for v in vf_centers}
+    rev: Dict[str, List[str]] = {}
+    for orig, n in v_norm.items():
         rev.setdefault(n, []).append(orig)
 
     mapping = {}
-    for m_orig, m_norm in main_norm.items():
-        # exact normalized match
-        if m_norm in rev:
-            mapping[m_orig] = rev[m_norm][0]
+    for s_orig, s_n in s_norm.items():
+        if not s_n:
             continue
-        # contains in either direction
-        picked = None
-        for v_orig, v_norm in vf_norm.items():
-            if m_norm and (m_norm in v_norm or v_norm in m_norm):
-                picked = v_orig
+        if s_n in rev:
+            mapping[s_orig] = rev[s_n][0]
+            continue
+        # contains either way
+        pick = None
+        for v_orig, v_n in v_norm.items():
+            if s_n in v_n or v_n in s_n:
+                pick = v_orig
                 break
-        if picked:
-            mapping[m_orig] = picked
+        if pick:
+            mapping[s_orig] = pick
     return mapping
 
-def force_classes_from_vf(main_df: pd.DataFrame, vf_map: dict[str, list[str]]) -> pd.DataFrame:
+def deterministic_assign(df: pd.DataFrame, classes: List[str]) -> pd.Series:
     """
-    For each center in the main grid, find the matching center in VF and then
-    overwrite the 'Class' values for that center IN ORDER with VF class codes.
-    We overwrite:
-      • cells that look like placeholders (Class 30, Classroom 09, numeric-only), OR
-      • if any lettered class is missing, we simply assign sequentially from top.
+    Assign classes round-robin in a deterministic order by PID (string).
+    This guarantees stable results across runs with the same inputs.
     """
-    if "Center" not in main_df.columns or "Class" not in main_df.columns:
-        st.error("Main sheet must have 'Center' and 'Class' columns.")
-        st.stop()
+    # sort by PID as string
+    tmp = df.copy()
+    tmp["__pid"] = tmp["ST: Participant PID"].astype(str).fillna("")
+    tmp = tmp.sort_values("__pid", kind="mergesort")  # stable
+    cls = []
+    k = len(classes)
+    if k == 0:
+        return pd.Series([""] * len(df), index=df.index)
 
-    out = main_df.copy()
-    out["Center"] = out["Center"].astype(str).fillna("").str.strip()
-    out["Class"]  = out["Class"].astype(str).fillna("").str.strip()
-
-    # build center mapping
-    main_centers = [c for c in out["Center"].dropna().unique() if c.strip()]
-    vf_centers   = list(vf_map.keys())
-    c_map = map_centers(main_centers, vf_centers)
-
-    for m_center in main_centers:
-        if m_center not in c_map:
-            continue
-        vf_center = c_map[m_center]
-        classes = [c for c in vf_map.get(vf_center, []) if c and isinstance(c, str)]
-        if not classes:
-            continue
-
-        # indices of rows for this center
-        idxs = out.index[out["Center"].str.strip() == m_center].tolist()
-        if not idxs:
-            continue
-
-        # determine which rows to overwrite:
-        # 1) any placeholder (Class 30 / Classroom 09), or numeric-only ('101')
-        rows_to_overwrite = []
-        for ridx in idxs:
-            val = out.at[ridx, "Class"]
-            is_placeholder = bool(PLACEHOLDER_ANY.match(val)) or bool(ONLY_NUMERIC.match(val))
-            rows_to_overwrite.append((ridx, is_placeholder))
-
-        # If none marked as placeholder but class set is clearly wrong (e.g., missing letters),
-        # we still overwrite sequentially to guarantee correctness.
-        if not any(flag for _, flag in rows_to_overwrite):
-            rows_to_assign = idxs
-        else:
-            rows_to_assign = [r for r, flag in rows_to_overwrite if flag]
-
-        # Assign VF classes in order to selected rows
-        p = 0
-        for ridx in rows_to_assign:
-            if p >= len(classes):
-                break
-            out.at[ridx, "Class"] = classes[p]
-            p += 1
-        # if there are more rows than VF classes, remaining rows are left as-is (safer)
-
-    return out
+    # round-robin
+    for i, _ in enumerate(tmp.index):
+        cls.append(classes[i % k])
+    assigned = pd.Series(cls, index=tmp.index)
+    # reindex back to original order
+    return assigned.reindex(df.index)
 
 def style_headers(ws):
     fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
@@ -192,28 +162,57 @@ def style_headers(ws):
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.fill = fill
-    for c in range(1, ws.max_column+1):
-        ws.column_dimensions[get_column_letter(c)].width = 18 if c > 2 else 28
+    for c in range(1, ws.max_column + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 22 if c <= 3 else 18
 
-# ---------------- run ----------------
-if main_file and vf_file:
-    main_df, sheet_name = read_main_grid(main_file)
-    vf_classes_map = parse_vf_classes(vf_file)
+# ---------------- Run ----------------
 
-    # (Optional) quick peek to verify VF parsing
-    st.write("VF classes detected (sample):")
-    st.json({k: vf_classes_map[k] for k in sorted(vf_classes_map)[:8]})
+if students_file and vf_file:
+    # 1) Load both files
+    students = load_students_frame(students_file)
+    vf_classes_map = parse_vf_funded(vf_file)
 
-    fixed = force_classes_from_vf(main_df, vf_classes_map)
+    # 2) Prepare center names
+    students["Center (clean)"] = students["ST: Center Name"].astype(str).str.replace(
+        r"^HCHSP\s*--\s*", "", regex=True
+    ).str.strip()
+    s_centers = [c for c in students["Center (clean)"].dropna().unique() if c.strip()]
+    v_centers = list(vf_classes_map.keys())
+    c_map = build_center_map(s_centers, v_centers)
 
-    out_path = "Campus_Classroom_Enrollment_CLASSES_FIXED.xlsx"
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        fixed.to_excel(writer, index=False, sheet_name=sheet_name)
-        ws = writer.book[sheet_name]
+    # Diagnostics for centers that don’t match
+    missing_in_vf = sorted(set(s_centers) - set(c_map.keys()))
+    extra_in_vf = sorted(set(v_centers) - set(c_map.values()))
+
+    # 3) Assign classes from VF per center (deterministic, round-robin by PID)
+    students["Class Name"] = ""
+    for s_center in s_centers:
+        mask = students["Center (clean)"] == s_center
+        if s_center not in c_map:
+            continue
+        vf_center = c_map[s_center]
+        class_list = [c for c in vf_classes_map.get(vf_center, []) if c and isinstance(c, str)]
+        if not class_list:
+            continue
+        block = students.loc[mask]
+        students.loc[mask, "Class Name"] = deterministic_assign(block, class_list)
+
+    # 4) Output
+    out_xlsx = "Students_With_Classes_From_VF.xlsx"
+    with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
+        # Students with classes (primary deliverable)
+        students.to_excel(writer, index=False, sheet_name="Students + Classes")
+        ws = writer.book["Students + Classes"]
         style_headers(ws)
+        # Optional diagnostics
+        diag = pd.DataFrame({
+            "Issue": (["Center not found in VF"] * len(missing_in_vf)) + (["VF center unused"] * len(extra_in_vf)),
+            "Center": missing_in_vf + extra_in_vf
+        })
+        if not diag.empty:
+            diag.to_excel(writer, index=False, sheet_name="Diagnostics")
+    with open(out_xlsx, "rb") as f:
+        st.download_button("📥 Download Students_With_Classes_From_VF.xlsx", f, file_name=out_xlsx)
 
-    with open(out_path, "rb") as f:
-        st.download_button("📥 Download fixed workbook", f, file_name=out_path)
-
-    st.success("Class names were overwritten from the VF funded report (letters preserved).")
-
+    st.success("Done: ‘Class Name’ was filled using the class list from the VF funded report (letters preserved).")
+    st.caption("If you later provide a QuickReport with ‘ST: Class Name’, you can replace the assignment with an authoritative PID merge.")
