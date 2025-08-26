@@ -1,261 +1,160 @@
-# app.py  — Campus Classroom Enrollment fixer
+# app.py — Replace "Class 30" using VF funded report (letters kept)
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import re
-from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
-from PIL import Image
-
 from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Alignment
 
-st.set_page_config(page_title="Campus Classroom Enrollment Fixer", layout="centered")
+st.set_page_config(page_title="Fix Class Names from VF", layout="centered")
 
-# ----------------------------
-# Header
-# ----------------------------
-try:
-    logo = Image.open("header_logo.png")
-    st.image(logo, width=240)
-except Exception:
-    pass
-
-st.title("Head Start — Campus Classroom Enrollment (Fix Class Names + Totals Order)")
+st.title("Fix Class Names from VF funded report (letters preserved)")
 st.markdown(
-    "- Upload your **Campus Classroom Enrollment** Excel (has columns like *Center, Class, Funded, Enrolled*).\n"
-    "- Upload your **VF QuickReport** (the 10422… file that contains `ST: Participant PID / Center / Class`).\n\n"
-    "This will:\n"
-    "1) Replace placeholder class labels (e.g., **Class 30**) with **lettered class names** from VF (e.g., **E117, A01, B114**), per center.\n"
-    "2) Move every **Center Total** row to the **top** of its center section (intro)."
+    "Upload **Campus Classroom Enrollment** (has columns like *Center, Class*) and the **VF funded report** "
+    "(sheet with blocks like `HCHSP -- <Center>` and lines `Class E117`, `Class A01`, …). "
+    "This will replace any **'Class 30' / 'Classroom 30'** with the **lettered classes from VF**, by **center**, in order."
 )
 
-main_file = st.file_uploader("Upload Campus Classroom Enrollment Excel", type=["xlsx"], key="main")
-vf_file   = st.file_uploader("Upload VF QuickReport (the 10422… file)", type=["xlsx"], key="vf")
+main_file = st.file_uploader("Campus Classroom Enrollment (.xlsx)", type=["xlsx"], key="main")
+vf_file   = st.file_uploader("VF funded report (.xlsx)", type=["xlsx"], key="vf")
 
-# ----------------------------
-# Helpers
-# ----------------------------
+# ---------- helpers ----------
 PLACEHOLDER_RE = re.compile(r"^\s*class(room)?\s*30\s*$", re.IGNORECASE)
 
-def find_header_row_by_columns(ws, required_cols: List[str], search_rows: int = 60) -> int | None:
+def parse_vf_classes(vf_file) -> dict[str, list[str]]:
     """
-    Find the first row whose values contain all `required_cols` (case-insensitive).
+    Parse the VF funded report format you showed (sheet name like 'VF_Average_Funded_Enrollment_Le'):
+    finds lines 'HCHSP -- <Center>' then lines 'Class <CODE>' and builds center -> [class codes].
     """
-    req = [c.lower() for c in required_cols]
-    for r in ws.iter_rows(min_row=1, max_row=search_rows):
+    xls = pd.ExcelFile(vf_file)
+    # pick the sheet that likely holds the text blocks
+    sheet = next((s for s in xls.sheet_names if s.lower().startswith("vf_average_funded")), xls.sheet_names[0])
+    raw = pd.read_excel(vf_file, sheet_name=sheet, header=None)
+
+    center_re = re.compile(r'^\s*HCHSP\s*--\s*(.+?)\s*$', re.IGNORECASE)
+    class_re  = re.compile(r'^\s*Class\s+([A-Za-z]+[A-Za-z0-9]*)\s*$', re.IGNORECASE)
+
+    mapping: dict[str, list[str]] = {}
+    current = None
+    for v in raw.iloc[:, 0].astype(str).fillna(""):
+        v = v.strip()
+        if not v:
+            continue
+        m_center = center_re.match(v)
+        if m_center:
+            current = m_center.group(1)
+            mapping.setdefault(current, [])
+            continue
+        m_class = class_re.match(v)
+        if m_class and current:
+            mapping[current].append(m_class.group(1))
+    return mapping
+
+def find_header_row_by_cols(ws, must_have=("Center", "Class"), scan_rows=80):
+    must = [c.lower() for c in must_have]
+    for r in ws.iter_rows(min_row=1, max_row=scan_rows):
         vals = [str(c.value).strip().lower() if c.value is not None else "" for c in r]
-        if all(any(reqcol == v for v in vals) for reqcol in req):
+        if all(any(m == v for v in vals) for m in must):
             return r[0].row
     return None
 
-def read_main_grid(file) -> pd.DataFrame:
-    """
-    Read the main Campus Classroom Enrollment grid by discovering a header row that
-    contains at least 'Center' and 'Class'.
-    """
-    wb = load_workbook(file, data_only=True)
-    # choose the first sheet that has our columns
-    header_row = None
-    chosen = None
-    for name in wb.sheetnames:
-        ws = wb[name]
-        header_row = find_header_row_by_columns(ws, ["Center", "Class"])
-        if header_row:
-            chosen = name
+def read_main_grid(main_file) -> tuple[pd.DataFrame, str]:
+    wb = load_workbook(main_file, data_only=True)
+    chosen, hdr = None, None
+    for s in wb.sheetnames:
+        ws = wb[s]
+        hdr = find_header_row_by_cols(ws)
+        if hdr:
+            chosen = s
             break
     if not chosen:
-        st.error("Couldn’t find a sheet with 'Center' and 'Class' headers in the main workbook.")
+        st.error("Couldn’t find a sheet with 'Center' and 'Class' headers.")
         st.stop()
-    file.seek(0)
-    df = pd.read_excel(file, sheet_name=chosen, header=header_row - 1, dtype=str)
-    # keep original dtypes for numeric columns later by re-casting
-    return df
+    main_file.seek(0)
+    df = pd.read_excel(main_file, sheet_name=chosen, header=hdr-1)
+    return df, chosen
 
-def load_vf_center_to_classes(file) -> Dict[str, List[str]]:
+def replace_placeholders(df: pd.DataFrame, vf_map: dict[str, list[str]]) -> pd.DataFrame:
     """
-    From the VF QuickReport, build: center -> sorted unique list of class names (lettered).
+    For each center, walk down its rows and replace 'Class 30' (or 'Classroom 30') with the VF class list in order.
+    Existing lettered class values are left as-is.
     """
-    try:
-        wb = load_workbook(file, data_only=True)
-        target_sheet = None
-        hdr_row = None
-        for s in wb.sheetnames:
-            ws = wb[s]
-            # look for row containing "ST: Participant PID" & "ST: Class Name"
-            has_pid = False
-            has_class = False
-            for r in ws.iter_rows(min_row=1, max_row=160):
-                vals = [str(c.value).strip().lower() if c.value is not None else "" for c in r]
-                if any("st: participant pid" == v for v in vals): has_pid = True
-                if any("st: class name" == v for v in vals): has_class = True
-                if has_pid and has_class:
-                    hdr_row = r[0].row
-                    target_sheet = s
-                    break
-            if target_sheet:
-                break
-        if not target_sheet or not hdr_row:
-            st.error("VF QuickReport: couldn’t find the required headers (`ST: Participant PID`, `ST: Class Name`).")
-            st.stop()
-        file.seek(0)
-        vf = pd.read_excel(file, sheet_name=target_sheet, header=hdr_row - 1, dtype=str)
-        need = {"ST: Center Name", "ST: Class Name"}
-        if not need.issubset(vf.columns):
-            st.error("VF QuickReport is missing 'ST: Center Name' or 'ST: Class Name'.")
-            st.stop()
-
-        vf = vf[list(need)].dropna(subset=["ST: Class Name"]).copy()
-        vf["ST: Center Name"] = vf["ST: Center Name"].astype(str).str.strip()
-        vf["ST: Class Name"]  = vf["ST: Class Name"].astype(str).str.strip()
-
-        # Build mapping: exact center text -> sorted unique class list
-        mapping: Dict[str, List[str]] = {}
-        for center, grp in vf.groupby("ST: Center Name"):
-            classes = sorted(grp["ST: Class Name"].dropna().unique(), key=lambda x: (re.sub(r"[^A-Za-z0-9]", "", x)))
-            mapping[center] = list(classes)
-        return mapping
-    except Exception as e:
-        st.error(f"Couldn’t read VF QuickReport: {e}")
+    if "Center" not in df.columns or "Class" not in df.columns:
+        st.error("Main sheet must contain columns 'Center' and 'Class'.")
         st.stop()
 
-def replace_placeholders_from_vf(main_df: pd.DataFrame, center_col="Center", class_col="Class",
-                                 center_to_classes: Dict[str, List[str]]) -> pd.DataFrame:
-    df = main_df.copy()
-    # Normalize text
-    df[center_col] = df[center_col].astype(str).str.strip()
-    df[class_col]  = df[class_col].astype(str).str.strip()
+    out = df.copy()
+    out["Center"] = out["Center"].astype(str).str.strip()
+    out["Class"]  = out["Class"].astype(str).str.strip()
 
-    # For each center we know about, replace placeholder rows in appearance order
-    for vf_center, class_list in center_to_classes.items():
-        # match rows where center cell contains the vf_center text (case-insensitive)
-        mask_center = df[center_col].str.contains(re.escape(vf_center), case=False, na=False)
-        # rows with placeholder in Class column
-        idxs = df.index[mask_center & df[class_col].str.match(PLACEHOLDER_RE, na=False)].tolist()
+    # normalize function for center text to improve matching
+    def norm_center(x: str) -> str:
+        x = x.lower().strip()
+        x = re.sub(r"\s+", " ", x)
+        return x
+
+    # build a center index
+    centers_in_main = out["Center"].dropna().astype(str).map(norm_center).tolist()
+
+    for vf_center, classes in vf_map.items():
+        if not classes:
+            continue
+        n_vf = [c for c in classes if isinstance(c, str) and c.strip()]
+
+        # find rows for this center
+        mask_center = out["Center"].astype(str).map(norm_center) == norm_center(vf_center)
+        idxs = out.index[mask_center].tolist()
         if not idxs:
-            continue
-        # Determine which class names are not already present in those rows
-        assigned = 0
-        for i, ridx in enumerate(idxs):
-            if assigned >= len(class_list):
-                break
-            df.at[ridx, class_col] = class_list[assigned]
-            assigned += 1
-        # If fewer placeholders than class names, that’s fine; if more, remaining stay as-is.
-    return df
+            # try 'contains' fallback (helps when headings have suffixes/prefixes)
+            mask_center = out["Center"].astype(str).str.contains(re.escape(vf_center), case=False, na=False)
+            idxs = out.index[mask_center].tolist()
+        if not idxs:
+            continue  # this center not present in the main grid
 
-def move_center_totals_to_top(df: pd.DataFrame, center_col="Center", class_col="Class") -> pd.DataFrame:
-    """
-    If a row with '<Center> Total' exists, move it to the first row for that center.
-    Otherwise, compute a total row and insert it first.
-    """
-    # Identify numeric columns for summing
-    numeric_cols = []
-    for c in df.columns:
-        if c in [center_col, class_col]:
-            continue
-        # consider columns that are purely numeric once you drop NaNs/blanks
-        try:
-            pd.to_numeric(df[c].dropna().replace("", pd.NA))
-            numeric_cols.append(c)
-        except Exception:
-            pass
+        # select placeholder rows within those indices, in order
+        ph_rows = [i for i in idxs if PLACEHOLDER_RE.match(out.at[i, "Class"] or "")]
+        # advance through placeholders and assign VF classes
+        p = 0
+        for ridx in ph_rows:
+            if p >= len(n_vf): break
+            out.at[ridx, "Class"] = n_vf[p]
+            p += 1
+        # (if there are more placeholders than VF classes, the extras remain as-is)
 
-    out_rows = []
-    seen_centers = []
-    # Build ordered list of unique centers ignoring rows that look like totals
-    base_centers = []
-    for val in df[center_col].astype(str):
-        v = val.strip()
-        if not v:
-            continue
-        if v.lower().endswith(" total"):
-            continue
-        if v not in base_centers:
-            base_centers.append(v)
+    return out
 
-    for center in base_centers:
-        grp = df[df[center_col] == center].copy()
-
-        # look for existing total row text variations
-        total_mask = df[center_col].astype(str).str.strip().str.lower() == f"{center.lower()} total"
-        existing_total = df[total_mask].copy()
-
-        if not existing_total.empty:
-            total_row = existing_total.iloc[0].copy()
-        else:
-            # compute a fresh total row
-            total_row = pd.Series({col: "" for col in df.columns})
-            total_row[center_col] = f"{center} Total"
-            for c in numeric_cols:
-                # sum numeric with coercion
-                total_row[c] = pd.to_numeric(grp[c], errors="coerce").sum(min_count=1)
-
-        # append total row FIRST, then the class records for that center
-        out_rows.append(total_row.to_dict())
-        out_rows.extend(grp.to_dict(orient="records"))
-
-        # remove the original total row from further processing
-        df = df[~total_mask]
-
-    # append any remaining rows that didn’t match pattern (headers, misc)
-    remaining = df[~df[center_col].isin(base_centers)]
-    out_rows.extend(remaining.to_dict(orient="records"))
-
-    return pd.DataFrame(out_rows, columns=main_df.columns)
-
-def style_basic(ws):
-    # Dark blue header, centered
-    header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+def style_headers(ws):
+    fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.fill = header_fill
-    # Widths
-    for col_idx in range(1, ws.max_column + 1):
-        col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 16 if col_idx > 2 else 28
+        cell.fill = fill
+    for c in range(1, ws.max_column+1):
+        ws.column_dimensions[get_column_letter(c)].width = 16 if c > 2 else 28
 
-# ----------------------------
-# Run
-# ----------------------------
+# ---------- run ----------
 if main_file and vf_file:
-    # 1) Read main grid
-    main_df = read_main_grid(main_file)
+    main_df, sheet_name = read_main_grid(main_file)
+    vf_map = parse_vf_classes(vf_file)
 
-    # Make sure the essential columns exist
-    if not {"Center", "Class"}.issubset(main_df.columns):
-        st.error("Main file must contain 'Center' and 'Class' columns.")
-        st.stop()
+    # (Optional) quick peek so you can confirm we read VF correctly
+    st.write("Classes found in VF by center (first few):")
+    st.json({k: v for k, v in vf_map.items()})
 
-    # 2) Get (center -> list of classes) from VF
-    center_to_classes = load_vf_center_to_classes(vf_file)
+    fixed = replace_placeholders(main_df, vf_map)
 
-    # 3) Replace placeholder class names per center using VF class lists
-    main_df = replace_placeholders_from_vf(main_df, center_col="Center", class_col="Class",
-                                           center_to_classes=center_to_classes)
-
-    # 4) Move each Center Total row to the TOP (intro) of its center section
-    fixed_df = move_center_totals_to_top(main_df, center_col="Center", class_col="Class")
-
-    # 5) Write a clean workbook with simple styling
-    out_path = "Campus_Classroom_Enrollment_FIXED.xlsx"
+    out_path = "Campus_Classroom_Enrollment_CLASSES_FIXED.xlsx"
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        fixed_df.to_excel(writer, index=False, sheet_name="Enrollment")
-        ws = writer.book["Enrollment"]
-        style_basic(ws)
-
-        # Title & timestamp sheet (optional)
-        ts = datetime.now(ZoneInfo("America/Chicago")).strftime("%m.%d.%y, %I:%M %p %Z")
-        title_ws = writer.book.create_sheet("Info")
-        title_ws["A1"] = "Head Start – 2025–2026 Campus Classroom Enrollment"
-        title_ws["A2"] = f"As of {ts}"
+        fixed.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.book[sheet_name]
+        style_headers(ws)
 
     with open(out_path, "rb") as f:
-        st.download_button("📥 Download: Campus_Classroom_Enrollment_FIXED.xlsx", f, file_name=out_path)
+        st.download_button("📥 Download fixed workbook", f, file_name=out_path)
 
-    st.success("Done! Placeholders replaced with VF class names and center totals moved to the top.")
+    st.success("All “Class 30” placeholders were replaced with lettered class names from VF (by center).")
 
 
