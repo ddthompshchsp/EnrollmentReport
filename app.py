@@ -38,7 +38,6 @@ inp_l, inp_c, inp_r = st.columns([1, 2, 1])
 with inp_c:
     vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
     aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
-    debug = st.toggle("Debug view (show parsed centers/classes)", value=False)
     process = st.button("Process & Download")
 
 # ----------------------------
@@ -49,7 +48,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     Parse VF report (header=None) into per-class rows:
     Center | Class | Funded | Enrolled
 
-    FIXED: class codes with letters (e.g., A01, E117) are now recognized.
+    Supports class codes with letters (e.g., A01, E117).
     """
     records = []
     current_center = None
@@ -145,16 +144,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     waitlist_totals = 0
 
     for center, group in merged.groupby("Center", sort=True):
-        # class rows
-        for _, r in group.iterrows():
-            rows.append({
-                "Center": r["Center"], "Class": r["Class"],
-                "Funded": int(r["Funded"]), "Enrolled": int(r["Enrolled"]),
-                "Applied": "", "Accepted": "", "Lacking/Overage": "", "Waitlist": "",
-                "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
-            })
-
-        # center totals
+        # ---- Center totals FIRST ----
         funded_sum   = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
         pct_total    = int(round(enrolled_sum / funded_sum * 100, 0)) if funded_sum > 0 else pd.NA
@@ -162,7 +152,8 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         applied_val  = int(applied_by_center.get(center, 0))
         waitlist_val = accepted_val if enrolled_sum > funded_sum else ""
         lacking_over = funded_sum - enrolled_sum
-        if waitlist_val != "": waitlist_totals += waitlist_val
+        if waitlist_val != "": 
+            waitlist_totals += waitlist_val
 
         rows.append({
             "Center": f"{center} Total", "Class": "",
@@ -172,9 +163,18 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
             "% Enrolled of Funded": pct_total
         })
 
+        # ---- Then the individual class rows ----
+        for _, r in group.iterrows():
+            rows.append({
+                "Center": r["Center"], "Class": r["Class"],
+                "Funded": int(r["Funded"]), "Enrolled": int(r["Enrolled"]),
+                "Applied": "", "Accepted": "", "Lacking/Overage": "", "Waitlist": "",
+                "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
+            })
+
     final = pd.DataFrame(rows)
 
-    # agency totals
+    # agency totals (grand total) at the very bottom
     agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(counts["Applied"].sum())
@@ -324,11 +324,6 @@ if process and vf_file and aa_file:
 
         vf_tidy = parse_vf(vf_raw)
         aa_counts = parse_applied_accepted(aa_raw)
-
-        if debug:
-            st.write("Centers detected:", sorted(vf_tidy["Center"].unique()))
-            st.write("Classes detected:", sorted(vf_tidy["Class"].unique()))
-
         final_df = build_output_table(vf_tidy, aa_counts)
 
         st.success("Preview below. Use the download button to get the Excel file.")
