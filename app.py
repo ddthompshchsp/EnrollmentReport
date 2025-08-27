@@ -38,39 +38,67 @@ inp_l, inp_c, inp_r = st.columns([1, 2, 1])
 with inp_c:
     vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
     aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
+    debug = st.toggle("Debug view (show parsed centers/classes)", value=False)
     process = st.button("Process & Download")
 
 # ----------------------------
 # Parsers
 # ----------------------------
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
-    """Parse VF report (header=None) into per-class rows: Center | Class | Funded | Enrolled"""
+    """
+    Parse VF report (header=None) into per-class rows:
+    Center | Class | Funded | Enrolled
+
+    FIXED: class codes with letters (e.g., A01, E117) are now recognized.
+    """
     records = []
     current_center = None
     current_class = None
 
-    for i in range(len(vf_df_raw)):
-        c0 = vf_df_raw.iloc[i, 0]
-        if isinstance(c0, str) and c0.startswith("HCHSP --"):
-            current_center = c0.strip()
-        elif isinstance(c0, str) and re.match(r"^Class \d+", c0):
-            current_class = c0.split(" ", 1)[1].strip()
+    # Precompiled (case-insensitive)
+    re_center = re.compile(r"^\s*HCHSP\s*--\s*(.+)$", re.I)
+    re_class  = re.compile(r"^\s*Class\s+([A-Za-z0-9\-]+)\s*$", re.I)
 
-        if c0 == "Class Totals:" and current_center and current_class:
+    nrows = len(vf_df_raw)
+    for i in range(nrows):
+        c0 = vf_df_raw.iloc[i, 0]
+        c0_str = c0 if isinstance(c0, str) else str(c0)
+
+        # Center line: "HCHSP -- <Center Name>"
+        m_center = re_center.match(c0_str)
+        if m_center:
+            current_center = m_center.group(1).strip()
+            continue
+
+        # Class line: "Class A01" / "Class 117" / "Class E117" / "Class A-01"
+        m_class = re_class.match(c0_str)
+        if m_class:
+            current_class = m_class.group(1).strip()
+            continue
+
+        # Totals row for the current class in the current center
+        if isinstance(c0, str) and c0.strip().lower() == "class totals:" and current_center and current_class:
             row = vf_df_raw.iloc[i]
-            funded = pd.to_numeric(row.iloc[4], errors="coerce")
+
+            # NOTE: adjust indices if your VF layout changes
+            # Here: col D = Enrolled (idx 3), col E = Funded (idx 4)
             enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
-            center_clean = re.sub(r"^HCHSP --\s*", "", current_center)
+            funded   = pd.to_numeric(row.iloc[4], errors="coerce")
+
             records.append({
-                "Center": center_clean,
+                "Center": current_center,
                 "Class": f"Class {current_class}",
-                "Funded": 0 if pd.isna(funded) else float(funded),
-                "Enrolled": 0 if pd.isna(enrolled) else float(enrolled),
+                "Funded": 0.0 if pd.isna(funded) else float(funded),
+                "Enrolled": 0.0 if pd.isna(enrolled) else float(enrolled),
             })
 
     tidy = pd.DataFrame(records)
     if tidy.empty:
-        raise ValueError("Could not find any 'Class Totals:' rows in the VF report. Check that you're uploading the correct file.")
+        raise ValueError(
+            "Could not find any 'Class Totals:' rows (or center/class markers) in the VF report. "
+            "Confirm you're uploading the correct VF export and that the Enrolled/Funded columns "
+            "are still at indices 3 and 4 respectively."
+        )
     return tidy
 
 
@@ -94,7 +122,8 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     counts = body.groupby(center_col)[status_col].value_counts().unstack(fill_value=0)
     for c in ["Accepted", "Applied"]:
-        if c not in counts.columns: counts[c] = 0
+        if c not in counts.columns:
+            counts[c] = 0
 
     return counts[["Accepted", "Applied"]].astype(int).reset_index().rename(columns={center_col: "Center"})
 
@@ -295,6 +324,11 @@ if process and vf_file and aa_file:
 
         vf_tidy = parse_vf(vf_raw)
         aa_counts = parse_applied_accepted(aa_raw)
+
+        if debug:
+            st.write("Centers detected:", sorted(vf_tidy["Center"].unique()))
+            st.write("Classes detected:", sorted(vf_tidy["Class"].unique()))
+
         final_df = build_output_table(vf_tidy, aa_counts)
 
         st.success("Preview below. Use the download button to get the Excel file.")
@@ -313,7 +347,6 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
-
 
 
 
