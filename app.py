@@ -1,29 +1,4 @@
-# app.py — Enrollment formatter with HARD-CODED class names (letters preserved)
-from datetime import datetime, date
-from zoneinfo import ZoneInfo
-import re
-from typing import Dict, List
 
-import pandas as pd
-import streamlit as st
-from PIL import Image
-
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.datetime import from_excel
-
-st.set_page_config(page_title="Enrollment Formatter", layout="centered")
-
-# =========================
-# HARD-CODED CLASSES (edit here)
-# =========================
-HARD_CODED_CLASSES: Dict[str, List[str]] = {
-    "farias-psja isd": ["E117","E120","E123","E135","E138","E141"],
-    "guerra elementary-psja isd": ["A01","A03","A04","A05","A08"],
-    "longoria-psja isd": ["A176","A177","A180","A181","A183","A186"],
-    "singleterry-donna isd": ["C303","C305","C306","C307","C308","C309"],
-    "thigpen-zavala-mcallen isd": ["B114","B115","B116","D106"],
 }
 # Force overwrite all rows for matching centers (recommended while debugging)
 FORCE_REPLACE_ALL_ROWS_FOR_MATCHING_CENTERS = True
