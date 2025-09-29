@@ -79,15 +79,12 @@ def _canonicalize_center(s: str) -> str:
     txt = re.sub(r"\([^)]*\)", " ", txt)
     txt = txt.lower()
     txt = re.sub(r"[^a-z0-9\s]", " ", txt)
-    filler = {
-        "head", "start", "headstart", "hs", "ehs",
-        "center", "campus", "elementary", "school", "program"
-    }
+    filler = {"head","start","headstart","hs","ehs","center","campus","elementary","school","program"}
     tokens = [t for t in txt.split() if t and t not in filler]
     return " ".join(tokens).strip()
 
 # Precompute canonical → official key map
-_CANON_TO_OFFICIAL = { _canonicalize_center(k): k for k in LIC_CAP }
+_CANON_TO_OFFICIAL = {_canonicalize_center(k): k for k in LIC_CAP}
 
 def lic_cap_for(center_name: str):
     """
@@ -102,7 +99,6 @@ def lic_cap_for(center_name: str):
         return None
     if canon in _CANON_TO_OFFICIAL:
         return LIC_CAP[_CANON_TO_OFFICIAL[canon]]
-    # Fallback: prefer longest matching key
     best_key = None
     best_len = 0
     for canon_k, official_key in _CANON_TO_OFFICIAL.items():
@@ -138,22 +134,15 @@ def _last_two_numbers(row) -> tuple[float | None, float | None]:
     """Return (enrolled, funded) as the last two numeric-looking values in the row."""
     nums = []
     for v in row:
-        try:
-            if v is None or (isinstance(v, float) and np.isnan(v)):
-                continue
-            # allow numbers stored as strings like "22" or "22.0"
-            x = pd.to_numeric(v, errors="coerce")
-            if pd.notna(x):
-                nums.append(float(x))
-        except Exception:
-            continue
+        x = pd.to_numeric(v, errors="coerce")
+        if pd.notna(x):
+            nums.append(float(x))
     if len(nums) >= 2:
-        # Assume ... [ ... ENROLLED, FUNDED ] as the last two numbers
         return nums[-2], nums[-1]
     return None, None
 
 # ----------------------------
-# Parsers (robust & dash-agnostic)
+# Parsers
 # ----------------------------
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
@@ -170,7 +159,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*(.+)$", re.I)
     # Avoid matching 'Class Totals:' as a class line
-    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)  # keep full name
+    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)
 
     for i in range(len(vf_df_raw)):
         row = vf_df_raw.iloc[i, :]
@@ -187,15 +176,15 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
             current_center = _norm_ws(m_center.group(1))
             continue
 
-        # Totals row can be in any of first few cells; handle BEFORE class line
+        # Totals row BEFORE class line
         if _row_has_totals(lower_cells) and current_center and current_class:
             enrolled, funded = _last_two_numbers(row)
-            # Fallback to fixed columns if we couldn't find two numbers
             if enrolled is None or funded is None:
-                enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
-                funded   = pd.to_numeric(row.iloc[4], errors="coerce")
-                enrolled = None if pd.isna(enrolled) else float(enrolled)
-                funded   = None if pd.isna(funded) else float(funded)
+                # fallback to fixed columns if needed
+                e = pd.to_numeric(row.iloc[3], errors="coerce")
+                f = pd.to_numeric(row.iloc[4], errors="coerce")
+                enrolled = None if pd.isna(e) else float(e)
+                funded   = None if pd.isna(f) else float(f)
 
             records.append({
                 "Center": current_center,
@@ -205,7 +194,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
             })
             continue
 
-        # Class (FULL name, including parentheses)
+        # Class (FULL name)
         m_class = re_class.match(first)
         if m_class:
             current_class = m_class.group(1).strip()
@@ -216,7 +205,6 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("Could not parse VF report (check class/center markers and column indices).")
     tidy["Center"] = tidy["Center"].map(_norm_ws)
     return tidy
-
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     header_row_idx = aa_df_raw.index[aa_df_raw.iloc[:, 0].astype(str).str.startswith("ST: Participant PID", na=False)]
@@ -232,7 +220,6 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     is_blank_date = body[date_col].isna() | body[date_col].astype(str).str.strip().eq("")
     body = body[is_blank_date].copy()
-    # Strip HCHSP + dash prefix and normalize spacing
     body[center_col] = (
         body[center_col]
         .astype(str)
@@ -252,11 +239,10 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
-    merged["% Enrolled of Funded"] = np.where(
-        merged["Funded"] > 0,
-        (merged["Enrolled"] / merged["Funded"] * 100).round(0).astype("Int64"),
-        pd.NA
-    )
+
+    # SAFE percentage (avoid inf): replace 0 funded with NaN, then round and cast to nullable Int64
+    pct = (merged["Enrolled"] * 100).div(merged["Funded"].replace(0, np.nan))
+    merged["% Enrolled of Funded"] = pd.array(pct.round(0), dtype="Int64")
 
     applied_by_center = merged.groupby("Center")["Applied"].max()
     accepted_by_center = merged.groupby("Center")["Accepted"].max()
@@ -457,6 +443,7 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
 
 
 
