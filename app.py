@@ -58,19 +58,28 @@ def lic_cap_for(center_name: str):
     return LIC_CAP.get(center_name.strip().lower())
 
 # ----------------------------
-# Parsers
+# Helpers
+# ----------------------------
+DASH_CLASS = r"[-‐-‒–—]"  # match ASCII hyphen, hyphen-like, en dash, em dash, etc.
+
+def _norm_center(s: str) -> str:
+    """Trim & collapse internal whitespace for stable center names."""
+    return re.sub(r"\s+", " ", str(s)).strip()
+
+# ----------------------------
+# Parsers (DASH-agnostic)
 # ----------------------------
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Parse VF report (header=None) into per-class rows:
     Center | Class | Funded | Enrolled
-    Supports class codes with letters (e.g., A01, E117).
+    Handles 'HCHSP — Center' with any dash variant.
     """
     records = []
     current_center = None
     current_class = None
 
-    re_center = re.compile(r"^\s*HCHSP\s*--\s*(.+)$", re.I)
+    re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*(.+)$", re.I)
     re_class  = re.compile(r"^\s*Class\s+([A-Za-z0-9\-]+)\s*$", re.I)
 
     for i in range(len(vf_df_raw)):
@@ -79,7 +88,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
         m_center = re_center.match(c0_str)
         if m_center:
-            current_center = m_center.group(1).strip()
+            current_center = _norm_center(m_center.group(1))
             continue
 
         m_class = re_class.match(c0_str)
@@ -102,6 +111,8 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     tidy = pd.DataFrame(records)
     if tidy.empty:
         raise ValueError("Could not parse VF report (check class/center markers and column indices).")
+    # Normalize the center names for consistency
+    tidy["Center"] = tidy["Center"].map(_norm_center)
     return tidy
 
 
@@ -119,7 +130,13 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     is_blank_date = body[date_col].isna() | body[date_col].astype(str).str.strip().eq("")
     body = body[is_blank_date].copy()
-    body[center_col] = body[center_col].astype(str).str.replace(r"^HCHSP --\s*", "", regex=True)
+    # Strip "HCHSP — " (any dash variant) from center and normalize whitespace
+    body[center_col] = (
+        body[center_col]
+        .astype(str)
+        .str.replace(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*", "", regex=True)
+        .map(_norm_center)
+    )
 
     counts = body.groupby(center_col)[status_col].value_counts().unstack(fill_value=0)
     for c in ["Accepted", "Applied"]:
@@ -162,7 +179,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         rows.append({
             "Center": f"{center} Total",
             "Room#/Age/Lang": "",
-            "Lic Cap.": lic_cap_for(center),                 # <-- hard-coded cap on Center Total row
+            "Lic Cap.": lic_cap_for(center),                 # hard-coded cap on Center Total row
             "Funded": funded_sum, "Enrolled": enrolled_sum,
             "Applied": applied_val, "Accepted": accepted_val,
             "Lacking/Overage": lacking_over, "Waitlist": waitlist_val,
@@ -173,8 +190,8 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         for _, r in group.iterrows():
             rows.append({
                 "Center": r["Center"],
-                "Room#/Age/Lang": r["Class"],                 # <-- renamed display column
-                "Lic Cap.": "",                               # <-- blank for class rows
+                "Room#/Age/Lang": r["Class"],                 # renamed display column
+                "Lic Cap.": "",                               # blank for class rows
                 "Funded": int(r["Funded"]), "Enrolled": int(r["Enrolled"]),
                 "Applied": "", "Accepted": "", "Lacking/Overage": "", "Waitlist": "",
                 "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
@@ -182,20 +199,18 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.DataFrame(rows)
 
-    # Agency total at the bottom
+    # Agency total at the bottom (Lic Cap. left BLANK)
     agency_funded   = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Funded"].sum())
     agency_enrolled = int(final.loc[final["Center"].str.endswith(" Total", na=False), "Enrolled"].sum())
     agency_applied  = int(counts["Applied"].sum())
     agency_accepted = int(counts["Accepted"].sum())
     agency_pct      = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
     agency_lacking  = agency_funded - agency_enrolled
-    # Sum of caps for centers present
-    agency_cap_sum  = sum(lic_cap_for(c) or 0 for c in centers_seen)
 
     final = pd.concat([final, pd.DataFrame([{
         "Center": "Agency Total",
         "Room#/Age/Lang": "",
-        "Lic Cap.": agency_cap_sum,                          # <-- summed cap (tell me if you prefer blank)
+        "Lic Cap.": "",                                     # leave blank for Agency Total
         "Funded": agency_funded, "Enrolled": agency_enrolled,
         "Applied": agency_applied, "Accepted": agency_accepted,
         "Lacking/Overage": agency_lacking, "Waitlist": waitlist_totals,
@@ -210,11 +225,15 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 # Excel Writer
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
-    def col_letter(n: int) -> str:
+    def idx_to_letter0(idx0: int) -> str:
+        n = idx0
         s = ""
-        while n >= 0:
-            s = chr(n % 26 + 65) + s
-            n = n // 26 - 1
+        while True:
+            n, r = divmod(n, 26)
+            s = chr(r + 65) + s
+            if n == 0:
+                break
+            n -= 1
         return s
 
     output = io.BytesIO()
@@ -248,17 +267,6 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
 
         last_col_0 = len(df.columns) - 1
-        # Convert zero-based last col index to Excel letter
-        def idx_to_letter0(idx0: int) -> str:
-            n = idx0
-            s = ""
-            while True:
-                n, r = divmod(n, 26)
-                s = chr(r + 65) + s
-                if n == 0:
-                    break
-                n -= 1
-            return s
         last_col_letter = idx_to_letter0(last_col_0)
 
         ws.merge_range(0, 2, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
