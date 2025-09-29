@@ -10,7 +10,7 @@ import streamlit as st
 st.set_page_config(page_title="HCHSP Enrollment", layout="wide")
 
 # ----------------------------
-# Header (Streamlit UI only)
+# Header (Streamlit UI)
 # ----------------------------
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
@@ -42,7 +42,7 @@ with inp_c:
     process = st.button("Process & Download")
 
 # ----------------------------
-# HARD-CODED LICENSED CAPACITY (authoritative)
+# HARD-CODED LICENSED CAPACITY
 # ----------------------------
 LIC_CAP = {
     "alvarez": 138, "camarena": 192, "chapa": 154, "edinburg": 232,
@@ -53,45 +53,30 @@ LIC_CAP = {
     "singleterry": 130, "thigpen": 136, "wilson": 119
 }
 
-# Accept ASCII hyphen + Unicode dash variants
+# accept ASCII hyphen + Unicode dashes
 DASH_CLASS = r"[-‐-‒–—]"
 
 # ----------------------------
-# Name normalization / matching
+# Normalization / matching
 # ----------------------------
 def _norm_ws(s: str) -> str:
     return re.sub(r"\s+", " ", str(s)).strip()
 
 def _canonicalize_center(s: str) -> str:
-    """
-    Canonical form used to match raw names to LIC_CAP keys.
-    - Strip HCHSP + any dash prefix
-    - Remove parentheticals "(...)"
-    - Lowercase, keep alnum+space
-    - Drop filler tokens as whole words
-    """
     if s is None:
         return ""
     txt = str(s)
-    # Remove leading "HCHSP — " (any dash variant)
-    txt = re.sub(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*", "", txt, flags=re.I)
-    # Remove parentheticals
-    txt = re.sub(r"\([^)]*\)", " ", txt)
+    txt = re.sub(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*", "", txt, flags=re.I)  # strip "HCHSP — "
+    txt = re.sub(r"\([^)]*\)", " ", txt)                                     # remove "(...)"
     txt = txt.lower()
     txt = re.sub(r"[^a-z0-9\s]", " ", txt)
-    filler = {"head","start","headstart","hs","ehs","center","campus","elementary","school","program"}
+    filler = {"head", "start", "headstart", "hs", "ehs", "center", "campus", "elementary", "school", "program"}
     tokens = [t for t in txt.split() if t and t not in filler]
     return " ".join(tokens).strip()
 
-# Precompute canonical → official key map
 _CANON_TO_OFFICIAL = {_canonicalize_center(k): k for k in LIC_CAP}
 
 def lic_cap_for(center_name: str):
-    """
-    Robust capacity lookup:
-    1) Exact canonical match
-    2) Fallback: longest substring containment
-    """
     if not isinstance(center_name, str):
         return None
     canon = _canonicalize_center(center_name)
@@ -99,13 +84,12 @@ def lic_cap_for(center_name: str):
         return None
     if canon in _CANON_TO_OFFICIAL:
         return LIC_CAP[_CANON_TO_OFFICIAL[canon]]
-    best_key = None
-    best_len = 0
-    for canon_k, official_key in _CANON_TO_OFFICIAL.items():
+    # fallback: longest substring containment
+    best_key, best_len = None, 0
+    for canon_k, off in _CANON_TO_OFFICIAL.items():
         if canon_k in canon or canon in canon_k:
             if len(canon_k) > best_len:
-                best_len = len(canon_k)
-                best_key = official_key
+                best_key, best_len = off, len(canon_k)
     return LIC_CAP.get(best_key) if best_key else None
 
 # ----------------------------
@@ -146,20 +130,17 @@ def _last_two_numbers(row) -> tuple[float | None, float | None]:
 # ----------------------------
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse VF report (header=None) into per-class rows:
-    Center | Class | Funded | Enrolled
+    Output columns: Center | Class | Funded | Enrolled
     - Accept any dash between 'HCHSP' and center
-    - Look across first few columns for markers
     - Capture FULL class name (incl. parentheses)
-    - Totals row: detect flexible phrasing; pick last two numeric values as (Enrolled, Funded)
+    - Totals row: detect flexible phrasing; take last two numbers (Enrolled, Funded)
     """
     records = []
     current_center = None
     current_class = None
 
     re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*(.+)$", re.I)
-    # Avoid matching 'Class Totals:' as a class line
-    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)
+    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)  # avoid "Class Totals:"
 
     for i in range(len(vf_df_raw)):
         row = vf_df_raw.iloc[i, :]
@@ -170,17 +151,16 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         first = cells[0]
         lower_cells = [c.lower() for c in cells]
 
-        # Center
+        # Center marker
         m_center = re_center.match(first)
         if m_center:
             current_center = _norm_ws(m_center.group(1))
             continue
 
-        # Totals row BEFORE class line
+        # Totals row (must come before checking for class)
         if _row_has_totals(lower_cells) and current_center and current_class:
             enrolled, funded = _last_two_numbers(row)
             if enrolled is None or funded is None:
-                # fallback to fixed columns if needed
                 e = pd.to_numeric(row.iloc[3], errors="coerce")
                 f = pd.to_numeric(row.iloc[4], errors="coerce")
                 enrolled = None if pd.isna(e) else float(e)
@@ -188,13 +168,13 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
             records.append({
                 "Center": current_center,
-                "Class": f"Class {current_class}",  # FULL text kept
+                "Class": f"Class {current_class}",  # keep full text including parentheses
                 "Funded": 0.0 if funded is None else funded,
                 "Enrolled": 0.0 if enrolled is None else enrolled,
             })
             continue
 
-        # Class (FULL name)
+        # Class line
         m_class = re_class.match(first)
         if m_class:
             current_class = m_class.group(1).strip()
@@ -218,8 +198,8 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     status_col = "ST: Status"
     date_col = "ST: Status End Date"
 
-    is_blank_date = body[date_col].isna() | body[date_col].astype(str).str.strip().eq("")
-    body = body[is_blank_date].copy()
+    is_blank = body[date_col].isna() | body[date_col].astype(str).str.strip().eq("")
+    body = body[is_blank].copy()
     body[center_col] = (
         body[center_col]
         .astype(str)
@@ -231,7 +211,6 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     for c in ["Accepted", "Applied"]:
         if c not in counts.columns:
             counts[c] = 0
-
     return counts[["Accepted", "Applied"]].astype(int).reset_index().rename(columns={center_col: "Center"})
 
 # ----------------------------
@@ -240,11 +219,11 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFrame:
     merged = vf_tidy.merge(counts, on="Center", how="left").fillna({"Accepted": 0, "Applied": 0})
 
-    # SAFE percentage (avoid inf): replace 0 funded with NaN, then round and cast to nullable Int64
+    # SAFE percentage (avoid inf when Funded = 0)
     pct = (merged["Enrolled"] * 100).div(merged["Funded"].replace(0, np.nan))
     merged["% Enrolled of Funded"] = pd.array(pct.round(0), dtype="Int64")
 
-    applied_by_center = merged.groupby("Center")["Applied"].max()
+    applied_by_center  = merged.groupby("Center")["Applied"].max()
     accepted_by_center = merged.groupby("Center")["Accepted"].max()
 
     rows = []
@@ -264,7 +243,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         # Center Total row — Lic Cap. filled here
         rows.append({
             "Center": f"{center} Total",
-            "Room#/Aage/Lang": "",
+            "Class": "",
             "Lic Cap.": lic_cap_for(center),
             "Funded": funded_sum, "Enrolled": enrolled_sum,
             "Applied": applied_val, "Accepted": accepted_val,
@@ -276,7 +255,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         for _, r in group.iterrows():
             rows.append({
                 "Center": r["Center"],
-                "Room#/Aage/Lang": r["Class"],  # keep "Class ..." including parentheses
+                "Class": r["Class"],  # keep "Class ..." with parentheses
                 "Lic Cap.": "",
                 "Funded": int(r["Funded"]), "Enrolled": int(r["Enrolled"]),
                 "Applied": "", "Accepted": "", "Lacking/Overage": "", "Waitlist": "",
@@ -295,16 +274,17 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     final = pd.concat([final, pd.DataFrame([{
         "Center": "Agency Total",
-        "Room#/Aage/Lang": "",
-        "Lic Cap.": "",  # leave blank
+        "Class": "",
+        "Lic Cap.": "",
         "Funded": agency_funded, "Enrolled": agency_enrolled,
         "Applied": agency_applied, "Accepted": agency_accepted,
         "Lacking/Overage": agency_lacking, "Waitlist": waitlist_totals,
         "% Enrolled of Funded": agency_pct
     }])], ignore_index=True)
 
+    # EXACT column order to match your screenshot
     return final[[
-        "Center","Room#/Aage/Lang","Lic Cap.","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
+        "Center","Class","Lic Cap.","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
     ]]
 
 # ----------------------------
@@ -312,13 +292,11 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 # ----------------------------
 def to_styled_excel(df: pd.DataFrame) -> bytes:
     def idx_to_letter0(idx0: int) -> str:
-        n = idx0
-        s = ""
+        n = idx0; s = ""
         while True:
             n, r = divmod(n, 26)
             s = chr(r + 65) + s
-            if n == 0:
-                break
+            if n == 0: break
             n -= 1
         return s
 
@@ -331,7 +309,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.hide_gridlines(0)
         ws.set_row(0, 24); ws.set_row(1, 22); ws.set_row(2, 20)
 
-        # Logo (optional)
+        # Optional logo
         logo = Path("header_logo.png")
         if logo.exists():
             ws.set_column(1, 1, 6)
@@ -374,21 +352,16 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_excel_row = last_row_0 + 1
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
-        # Column widths
+        # Column widths to match layout
         widths = {
-            "Center": 28,
-            "Room#/Aage/Lang": 22,
-            "Lic Cap.": 10,
+            "Center": 28, "Class": 22, "Lic Cap.": 10,
             "Funded": 12, "Enrolled": 12, "Applied": 12, "Accepted": 12,
-            "Lacking/Overage": 14, "Waitlist": 12,
+            "Lacking/Overage": 14, "Waitlist": 12, "% Enrolled of Funded": 16
         }
         for name, width in widths.items():
             if name in df.columns:
                 idx = df.columns.get_loc(name)
                 ws.set_column(idx, idx, width)
-        if "% Enrolled of Funded" in df.columns:
-            idx = df.columns.get_loc("% Enrolled of Funded")
-            ws.set_column(idx, idx, 16)
 
         # Borders
         border_all = wb.add_format({"border": 1})
@@ -396,16 +369,15 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
             "type": "formula", "criteria": "TRUE", "format": border_all
         })
 
-        # % Enrolled of Funded formatting
-        if "% Enrolled of Funded" in df.columns:
-            pct_idx = df.columns.get_loc("% Enrolled of Funded")
-            pct_letter = idx_to_letter0(pct_idx)
-            pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
-            ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100, "format": wb.add_format({"font_color": "red"})})
-            ws.conditional_format(pct_range, {"type": "cell", "criteria": ">", "value": 100, "format": wb.add_format({"font_color": "blue"})})
-            ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE", "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
+        # % formatting & color cues
+        pct_idx = df.columns.get_loc("% Enrolled of Funded")
+        pct_letter = idx_to_letter0(pct_idx)
+        pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
+        ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100, "format": wb.add_format({"font_color": "red"})})
+        ws.conditional_format(pct_range, {"type": "cell", "criteria": ">", "value": 100, "format": wb.add_format({"font_color": "blue"})})
+        ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE", "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
-        # Bold totals
+        # Bold total rows
         bold_row = wb.add_format({"bold": True})
         for ridx, val in enumerate(df["Center"].tolist()):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
@@ -430,7 +402,7 @@ if process and vf_file and aa_file:
         pct_col = "% Enrolled of Funded"
         preview_df[pct_col] = preview_df[pct_col].apply(lambda v: "" if pd.isna(v) else f"{int(v)}%")
         preview_df = preview_df[[
-            "Center","Room#/Aage/Lang","Lic Cap.","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist",pct_col
+            "Center","Class","Lic Cap.","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist",pct_col
         ]]
         st.dataframe(preview_df, use_container_width=True)
 
@@ -443,8 +415,6 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
-
-
 
 
 
