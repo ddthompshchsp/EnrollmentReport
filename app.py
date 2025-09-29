@@ -42,6 +42,22 @@ with inp_c:
     process = st.button("Process & Download")
 
 # ----------------------------
+# HARD-CODED LICENSED CAPACITY
+# ----------------------------
+LIC_CAP = {
+    "alvarez": 138, "camarena": 192, "chapa": 154, "edinburg": 232,
+    "edinburg north": 147, "escandon": 131, "farias": 153, "guerra": 144,
+    "guzman": 343, "longoria": 125, "mercedes": 213, "mission": 165,
+    "monte alto": 100, "palacios": 135, "salinas": 90, "sam fordyce": 121,
+    "sam houston": 134, "san carlos": 105, "san juan": 182, "seguin": 150,
+    "singleterry": 130, "thigpen": 136, "wilson": 119
+}
+def lic_cap_for(center_name: str):
+    if not isinstance(center_name, str):
+        return None
+    return LIC_CAP.get(center_name.strip().lower())
+
+# ----------------------------
 # Parsers
 # ----------------------------
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
@@ -128,8 +144,10 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
 
     rows = []
     waitlist_totals = 0
+    centers_seen = []
 
     for center, group in merged.groupby("Center", sort=True):
+        centers_seen.append(center)
         # Totals first
         funded_sum   = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
@@ -142,7 +160,9 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
             waitlist_totals += waitlist_val
 
         rows.append({
-            "Center": f"{center} Total", "Class": "",
+            "Center": f"{center} Total",
+            "Room#/Age/Lang": "",
+            "Lic Cap.": lic_cap_for(center),                 # <-- hard-coded cap on Center Total row
             "Funded": funded_sum, "Enrolled": enrolled_sum,
             "Applied": applied_val, "Accepted": accepted_val,
             "Lacking/Overage": lacking_over, "Waitlist": waitlist_val,
@@ -152,7 +172,9 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         # Then the classes
         for _, r in group.iterrows():
             rows.append({
-                "Center": r["Center"], "Class": r["Class"],
+                "Center": r["Center"],
+                "Room#/Age/Lang": r["Class"],                 # <-- renamed display column
+                "Lic Cap.": "",                               # <-- blank for class rows
                 "Funded": int(r["Funded"]), "Enrolled": int(r["Enrolled"]),
                 "Applied": "", "Accepted": "", "Lacking/Overage": "", "Waitlist": "",
                 "% Enrolled of Funded": int(r["% Enrolled of Funded"]) if pd.notna(r["% Enrolled of Funded"]) else pd.NA
@@ -167,9 +189,13 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     agency_accepted = int(counts["Accepted"].sum())
     agency_pct      = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
     agency_lacking  = agency_funded - agency_enrolled
+    # Sum of caps for centers present
+    agency_cap_sum  = sum(lic_cap_for(c) or 0 for c in centers_seen)
 
     final = pd.concat([final, pd.DataFrame([{
-        "Center": "Agency Total", "Class": "",
+        "Center": "Agency Total",
+        "Room#/Age/Lang": "",
+        "Lic Cap.": agency_cap_sum,                          # <-- summed cap (tell me if you prefer blank)
         "Funded": agency_funded, "Enrolled": agency_enrolled,
         "Applied": agency_applied, "Accepted": agency_accepted,
         "Lacking/Overage": agency_lacking, "Waitlist": waitlist_totals,
@@ -177,7 +203,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
     }])], ignore_index=True)
 
     return final[[
-        "Center","Class","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
+        "Center","Room#/Age/Lang","Lic Cap.","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist","% Enrolled of Funded"
     ]]
 
 # ----------------------------
@@ -222,7 +248,18 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         red_fmt = wb.add_format({"bold": True, "font_size": 12, "font_color": "#C00000"})
 
         last_col_0 = len(df.columns) - 1
-        last_col_letter = col_letter(last_col_0)
+        # Convert zero-based last col index to Excel letter
+        def idx_to_letter0(idx0: int) -> str:
+            n = idx0
+            s = ""
+            while True:
+                n, r = divmod(n, 26)
+                s = chr(r + 65) + s
+                if n == 0:
+                    break
+                n -= 1
+            return s
+        last_col_letter = idx_to_letter0(last_col_0)
 
         ws.merge_range(0, 2, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 2, 1, last_col_0, "", subtitle_fmt)
@@ -246,26 +283,32 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         last_excel_row = last_row_0 + 1
         ws.autofilter(3, 0, last_row_0, last_col_0)
 
-        widths = {"Center": 28, "Class": 14, "Funded": 12, "Enrolled": 12,
-                  "Applied": 12, "Accepted": 12, "Lacking/Overage": 14, "Waitlist": 12}
+        widths = {
+            "Center": 28, "Room#/Age/Lang": 18, "Lic Cap.": 10,
+            "Funded": 12, "Enrolled": 12, "Applied": 12, "Accepted": 12,
+            "Lacking/Overage": 14, "Waitlist": 12, "% Enrolled of Funded": 16
+        }
         for name, width in widths.items():
             if name in df.columns:
                 idx = df.columns.get_loc(name)
                 ws.set_column(idx, idx, width)
-        ws.set_column(df.columns.get_loc("% Enrolled of Funded"), df.columns.get_loc("% Enrolled of Funded"), 16)
 
+        # Borders
         border_all = wb.add_format({"border": 1})
         ws.conditional_format(f"A4:{last_col_letter}{last_excel_row}", {"type": "formula", "criteria": "TRUE", "format": border_all})
 
+        # % Enrolled of Funded formatting
         pct_idx = df.columns.get_loc("% Enrolled of Funded")
-        pct_letter = col_letter(pct_idx)
+        pct_letter = idx_to_letter0(pct_idx)
         pct_range = f"{pct_letter}5:{pct_letter}{last_excel_row}"
         ws.conditional_format(pct_range, {"type": "cell", "criteria": "<", "value": 100, "format": wb.add_format({"font_color": "red"})})
         ws.conditional_format(pct_range, {"type": "cell", "criteria": ">", "value": 100, "format": wb.add_format({"font_color": "blue"})})
         ws.conditional_format(pct_range, {"type": "formula", "criteria": "TRUE", "format": wb.add_format({'num_format': '0"%"', 'align': 'center'})})
 
+        # Bold the total rows
         bold_row = wb.add_format({"bold": True})
-        for ridx, val in enumerate(df["Center"].tolist()):
+        center_vals = df["Center"].tolist()
+        for ridx, val in enumerate(center_vals):
             if isinstance(val, str) and (val.endswith(" Total") or val == "Agency Total"):
                 ws.set_row(ridx + 4, None, bold_row)
 
@@ -287,7 +330,9 @@ if process and vf_file and aa_file:
         preview_df = final_df.copy()
         pct_col = "% Enrolled of Funded"
         preview_df[pct_col] = preview_df[pct_col].apply(lambda v: "" if pd.isna(v) else f"{int(v)}%")
-        preview_df = preview_df[["Center","Class","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist",pct_col]]
+        preview_df = preview_df[[
+            "Center","Room#/Age/Lang","Lic Cap.","Funded","Enrolled","Applied","Accepted","Lacking/Overage","Waitlist",pct_col
+        ]]
         st.dataframe(preview_df, use_container_width=True)
 
         xlsx_bytes = to_styled_excel(final_df)
@@ -299,5 +344,3 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
-
-
