@@ -129,9 +129,9 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Output columns: Center | Class | Funded | Enrolled | PctRatio
     - Accept any dash between 'HCHSP' and center
-    - Capture FULL class name (incl. parentheses)
+    - Capture class name exactly as it appears (NO "Class " prefix)
     - Totals row: Enrolled=col 3, Funded=col 4, Percent ratio=col 6 (fallback to last-two-numbers)
-    - ALSO captures class headers like "Home Based 01" (or 1/001/etc)
+    - Also captures "Home Based 01" style class headers
     """
     records = []
     current_center = None
@@ -139,11 +139,10 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*(.+)$", re.I)
 
-    # Standard class header
-    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)  # avoid "Class Totals:"
+    # Matches: "Class PK3", "Class 101 (Spanish)", etc. (but not "Class Totals:")
+    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)
 
-    # NEW: Home Based with leading zeros, extra spaces, and optional trailing descriptors
-    # Examples: "Home Based 01", "Home Based  01", "Home Based 001 (Spanish)"
+    # Matches: "Home Based 01", "Home Based  01", "Home Based 001 (EHS)", etc.
     re_home_based = re.compile(r"^\s*(Home\s*Based\s*0*\d+\b.*)\s*$", re.I)
 
     for i in range(len(vf_df_raw)):
@@ -158,10 +157,9 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         m_center = re_center.match(first)
         if m_center:
             current_center = _norm_ws(m_center.group(1))
-            current_class = None  # reset on center change
+            current_class = None
             continue
 
-        # Totals row -> write record
         if _row_has_totals(lower_cells) and current_center and current_class:
             enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
             funded   = pd.to_numeric(row.iloc[4], errors="coerce")
@@ -172,21 +170,15 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
                 enrolled = e if e is not None else enrolled
                 funded   = f if f is not None else funded
 
-            # Avoid "Class Class ..." if the class header already includes "Class"
-            class_label = current_class.strip()
-            if not re.match(r"^\s*Class\b", class_label, flags=re.I):
-                class_label = f"Class {class_label}"
-
             records.append({
                 "Center": current_center,
-                "Class": class_label,
+                "Class": current_class,  # ✅ no prefix
                 "Funded": 0.0 if pd.isna(funded) else float(funded),
                 "Enrolled": 0.0 if pd.isna(enrolled) else float(enrolled),
                 "PctRatio": None if pd.isna(pct_ratio) else float(pct_ratio),
             })
             continue
 
-        # Class markers
         m_class = re_class.match(first)
         if m_class:
             current_class = _norm_ws(m_class.group(1))
@@ -278,7 +270,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
             "Comments": ""
         })
 
-        # Class rows — FULL class text, Lic Cap. blank
+        # Class rows — class text exactly as parsed
         for _, r in group.iterrows():
             rows.append({
                 "Center": r["Center"],
@@ -466,3 +458,4 @@ if process and vf_file and aa_file:
         )
     except Exception as e:
         st.error(f"Processing error: {e}")
+
