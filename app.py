@@ -131,13 +131,20 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     - Accept any dash between 'HCHSP' and center
     - Capture FULL class name (incl. parentheses)
     - Totals row: Enrolled=col 3, Funded=col 4, Percent ratio=col 6 (fallback to last-two-numbers)
+    - ALSO captures class headers like "Home Based 01" (or 1/001/etc)
     """
     records = []
     current_center = None
     current_class  = None
 
     re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*(.+)$", re.I)
+
+    # Standard class header
     re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)  # avoid "Class Totals:"
+
+    # NEW: Home Based with leading zeros, extra spaces, and optional trailing descriptors
+    # Examples: "Home Based 01", "Home Based  01", "Home Based 001 (Spanish)"
+    re_home_based = re.compile(r"^\s*(Home\s*Based\s*0*\d+\b.*)\s*$", re.I)
 
     for i in range(len(vf_df_raw)):
         row = vf_df_raw.iloc[i, :]
@@ -151,28 +158,43 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         m_center = re_center.match(first)
         if m_center:
             current_center = _norm_ws(m_center.group(1))
+            current_class = None  # reset on center change
             continue
 
+        # Totals row -> write record
         if _row_has_totals(lower_cells) and current_center and current_class:
             enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
             funded   = pd.to_numeric(row.iloc[4], errors="coerce")
             pct_ratio= pd.to_numeric(row.iloc[6], errors="coerce")  # ratio (1.00, 1.12, ...)
+
             if pd.isna(enrolled) or pd.isna(funded):
                 e, f = _last_two_numbers(row)
                 enrolled = e if e is not None else enrolled
                 funded   = f if f is not None else funded
+
+            # Avoid "Class Class ..." if the class header already includes "Class"
+            class_label = current_class.strip()
+            if not re.match(r"^\s*Class\b", class_label, flags=re.I):
+                class_label = f"Class {class_label}"
+
             records.append({
                 "Center": current_center,
-                "Class": f"Class {current_class}",
+                "Class": class_label,
                 "Funded": 0.0 if pd.isna(funded) else float(funded),
                 "Enrolled": 0.0 if pd.isna(enrolled) else float(enrolled),
                 "PctRatio": None if pd.isna(pct_ratio) else float(pct_ratio),
             })
             continue
 
+        # Class markers
         m_class = re_class.match(first)
         if m_class:
-            current_class = m_class.group(1).strip()
+            current_class = _norm_ws(m_class.group(1))
+            continue
+
+        m_home = re_home_based.match(first)
+        if m_home:
+            current_class = _norm_ws(m_home.group(1))
             continue
 
     tidy = pd.DataFrame(records)
@@ -234,9 +256,7 @@ def build_output_table(vf_tidy: pd.DataFrame, counts: pd.DataFrame) -> pd.DataFr
         accepted_val = int(accepted_by_center.get(center, 0))
         applied_val  = int(applied_by_center.get(center, 0))
 
-        # ---- NEW RULE for Waitlist on Center Totals ----
-        # If Enrolled >= Funded OR Enrolled == Funded, set Waitlist = Accepted.
-        # (Previously only when Enrolled > Funded.)
+        # If Enrolled >= Funded, set Waitlist = Accepted.
         if funded_sum > 0 and enrolled_sum >= funded_sum:
             waitlist_val = accepted_val
         else:
