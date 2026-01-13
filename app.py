@@ -128,22 +128,24 @@ def _last_two_numbers(row):
 def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Output columns: Center | Class | Funded | Enrolled | PctRatio
-    - Accept any dash between 'HCHSP' and center
-    - Capture class name exactly as it appears (NO "Class " prefix)
-    - Totals row: Enrolled=col 3, Funded=col 4, Percent ratio=col 6 (fallback to last-two-numbers)
-    - Also captures "Home Based 01" style class headers
+
+    Rules:
+    - Keep 'Class X' exactly as 'Class X'
+    - Keep 'Home Based 01' exactly as 'Home Based 01'
+    - Do NOT auto-add 'Class' to Home Based
+    - Class names may repeat across centers (allowed)
     """
     records = []
     current_center = None
     current_class  = None
 
-    re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*(.+)$", re.I)
+    re_center = re.compile(rf"^\s*HCHSP\s*{DASH_CLASS}+\s*(.+)$", re.I)
 
-    # Matches: "Class PK3", "Class 101 (Spanish)", etc. (but not "Class Totals:")
-    re_class  = re.compile(r"^\s*Class\s+(?!Totals:)(.+?)\s*$", re.I)
+    # Matches: "Class PK3", "Class 101 (Spanish)"
+    re_class = re.compile(r"^\s*(Class\s+(?!Totals).+)$", re.I)
 
-    # Matches: "Home Based 01", "Home Based  01", "Home Based 001 (EHS)", etc.
-    re_home_based = re.compile(r"^\s*(Home\s*Based\s*0*\d+\b.*)\s*$", re.I)
+    # Matches: "Home Based 01", "Home  Based   001 (EHS)"
+    re_home_based = re.compile(r"^\s*(Home\s*Based\s*0*\d+\b.*)$", re.I)
 
     for i in range(len(vf_df_raw)):
         row = vf_df_raw.iloc[i, :]
@@ -154,16 +156,18 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         first = cells[0]
         lower_cells = [c.lower() for c in cells]
 
+        # ---- Center header ----
         m_center = re_center.match(first)
         if m_center:
             current_center = _norm_ws(m_center.group(1))
             current_class = None
             continue
 
+        # ---- Totals row ----
         if _row_has_totals(lower_cells) and current_center and current_class:
             enrolled = pd.to_numeric(row.iloc[3], errors="coerce")
             funded   = pd.to_numeric(row.iloc[4], errors="coerce")
-            pct_ratio= pd.to_numeric(row.iloc[6], errors="coerce")  # ratio (1.00, 1.12, ...)
+            pct_ratio= pd.to_numeric(row.iloc[6], errors="coerce")
 
             if pd.isna(enrolled) or pd.isna(funded):
                 e, f = _last_two_numbers(row)
@@ -172,28 +176,31 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
             records.append({
                 "Center": current_center,
-                "Class": current_class,  # ✅ no prefix
+                "Class": current_class,   # ← EXACT label preserved
                 "Funded": 0.0 if pd.isna(funded) else float(funded),
                 "Enrolled": 0.0 if pd.isna(enrolled) else float(enrolled),
                 "PctRatio": None if pd.isna(pct_ratio) else float(pct_ratio),
             })
             continue
 
+        # ---- Class headers ----
         m_class = re_class.match(first)
         if m_class:
-            current_class = _norm_ws(m_class.group(1))
+            current_class = _norm_ws(m_class.group(1))  # keeps "Class PK3"
             continue
 
         m_home = re_home_based.match(first)
         if m_home:
-            current_class = _norm_ws(m_home.group(1))
+            current_class = _norm_ws(m_home.group(1))   # keeps "Home Based 01"
             continue
 
     tidy = pd.DataFrame(records)
     if tidy.empty:
-        raise ValueError("Could not parse VF report (check class/center markers and column indices).")
+        raise ValueError("Could not parse VF report (check class/center markers).")
+
     tidy["Center"] = tidy["Center"].map(_norm_ws)
     return tidy
+
 
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
