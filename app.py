@@ -61,7 +61,6 @@ LIC_CAP = {
     "guzman": 373,
     "longoria": 151,
     "mercedes": 182,
-    "mission ehs academy": "",
     "monte alto": 100,
     "palmview": None,
     "roosevelt": None,
