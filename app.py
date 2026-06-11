@@ -314,8 +314,16 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     # Same original filter: only active rows with blank Status End Date.
     is_blank_date = body[date_col].isna() | body[date_col].astype(str).str.strip().eq("")
 
-    # New required filter: only include 2026-2027 program year.
-    is_target_py = body[target_py_col].astype(str).str.strip().eq("2026-2027")
+    # Fixed rule: Target PY must contain 2026-2027.
+    # The report may show the program year as:
+    # (Hidalgo County Head Start Program)2026-2027 (07/01/2026--06/30/2027)
+    # so we use contains instead of an exact match.
+    is_target_py = (
+        body[target_py_col]
+        .astype(str)
+        .str.strip()
+        .str.contains("2026-2027", na=False)
+    )
 
     body = body[is_blank_date & is_target_py].copy()
 
