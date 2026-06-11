@@ -25,7 +25,7 @@ with hdr_c:
     st.markdown(
         """
         <p style='text-align:center; font-size:16px; margin-top:0;'>
-        Upload the VF Average Funded Enrollment report and the 25–26 Applied/Accepted report.
+        Upload the VF Average Funded Enrollment report and the 2026–2027 Applied/Accepted report.
         </p>
         """,
         unsafe_allow_html=True,
@@ -39,19 +39,41 @@ st.divider()
 inp_l, inp_c, inp_r = st.columns([1, 2, 1])
 with inp_c:
     vf_file = st.file_uploader("Upload *VF_Average_Funded_Enrollment_Level.xlsx*", type=["xlsx"], key="vf")
-    aa_file = st.file_uploader("Upload *25-26 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
+    aa_file = st.file_uploader("Upload *2026-2027 Applied/Accepted.xlsx*", type=["xlsx"], key="aa")
     process = st.button("Process & Download")
 
 # ----------------------------
 # HARD-CODED LICENSED CAPACITY
 # ----------------------------
+# 2026-2027 license capacities.
+# Use None for centers that should stay blank because no Lic. Cap. was provided.
 LIC_CAP = {
-    "alvarez": 138, "camarena": 192, "chapa": 154, "edinburg": 232,
-    "edinburg north": 147, "escandon": 131, "farias": 153, "guerra": 144,
-    "guzman": 343, "longoria": 125, "mercedes": 213, "mission": 165,
-    "monte alto": 100, "palacios": 135, "salinas": 90, "sam fordyce": 121,
-    "sam houston": 134, "san carlos": 105, "san juan": 182, "seguin": 150,
-    "singleterry": 130, "thigpen": 136, "wilson": 119
+    "arnold": None,
+    "alvarez": 138,
+    "castro": None,
+    "cesar chavez": None,
+    "donna ehs": "40/100",
+    "edinburg": 232,
+    "edinburg north": 147,
+    "escandon": 109,
+    "farias": 132,
+    "garza": None,
+    "garza ehs academy": None,
+    "guerra": 144,
+    "guzman": 373,
+    "longoria": 151,
+    "mercedes": 182,
+    "mission ehs academy": "13/115",
+    "monte alto": 100,
+    "palmview": None,
+    "roosevelt": None,
+    "salinas": 90,
+    "sam houston": 108,
+    "san carlos": 105,
+    "san juan ehs academy": "13/149",
+    "singleterry": 204,
+    "thigpen": 108,
+    "wilson": 96,
 }
 
 # accept ASCII hyphen + Unicode dashes
@@ -68,27 +90,96 @@ def _canonicalize_center(s: str) -> str:
         return ""
     txt = str(s)
     txt = re.sub(rf"^\s*HCHSP\s*{DASH_CLASS}{{1,}}\s*", "", txt, flags=re.I)  # strip "HCHSP — "
-    txt = re.sub(r"\([^)]*\)", " ", txt)                                     # remove "(...)"
+    txt = re.sub(r"\([^)]*\)", " ", txt)                                      # remove "(...)"
     txt = txt.lower()
     txt = re.sub(r"[^a-z0-9\s]", " ", txt)
-    filler = {"head", "start", "headstart", "hs", "ehs", "center", "campus", "elementary", "school", "program"}
+
+    # These words are removed so center names match even when the source report includes
+    # district names, school type, or descriptors.
+    filler = {
+        "head", "start", "headstart", "center", "campus", "elementary", "elem",
+        "school", "program", "isd", "cisd", "psja", "mcallen", "mission",
+        "donna", "edinburg", "mercedes", "academy", "hs"
+    }
     tokens = [t for t in txt.split() if t and t not in filler]
     return " ".join(tokens).strip()
 
 _CANON_TO_OFFICIAL = {_canonicalize_center(k): k for k in LIC_CAP}
 
+# Extra aliases for names as they appear in the 2026-2027 classroom report.
+CENTER_ALIASES = {
+    "arnold": "arnold",
+    "alvarez": "alvarez",
+    "castro": "castro",
+    "cesar chavez": "cesar chavez",
+    "chavez": "cesar chavez",
+    "donna ehs": "donna ehs",
+    "donna": "donna ehs",
+    "edinburg": "edinburg",
+    "edinburg north": "edinburg north",
+    "north": "edinburg north",
+    "escandon": "escandon",
+    "farias": "farias",
+    "garza": "garza",
+    "garza ehs": "garza ehs academy",
+    "garza academy": "garza ehs academy",
+    "guerra": "guerra",
+    "guzman": "guzman",
+    "longoria": "longoria",
+    "mercedes": "mercedes",
+    "mission ehs": "mission ehs academy",
+    "mission": "mission ehs academy",
+    "robert garate monte alto": "monte alto",
+    "garate monte alto": "monte alto",
+    "monte alto": "monte alto",
+    "palmview": "palmview",
+    "roosevelt": "roosevelt",
+    "salinas": "salinas",
+    "sam houston": "sam houston",
+    "houston": "sam houston",
+    "san carlos": "san carlos",
+    "san juan ehs": "san juan ehs academy",
+    "san juan": "san juan ehs academy",
+    "singleterry": "singleterry",
+    "thigpen": "thigpen",
+    "thigpen zavala": "thigpen",
+    "zavala": "thigpen",
+    "wilson": "wilson",
+}
+
 def lic_cap_for(center_name: str):
     if not isinstance(center_name, str):
-        return None
+        return ""
+
+    raw = _norm_ws(center_name).lower()
+    raw = re.sub(rf"^\s*hchsp\s*{DASH_CLASS}{{1,}}\s*", "", raw, flags=re.I)
+    raw = re.sub(r"[^a-z0-9\s]", " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+
+    # Check the most specific aliases first so, for example,
+    # "San Juan EHS Academy" does not get matched too early by "san juan".
+    for alias, official in sorted(CENTER_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+        if alias in raw:
+            val = LIC_CAP.get(official)
+            return "" if val is None else val
+
     canon = _canonicalize_center(center_name)
+    if canon in CENTER_ALIASES:
+        val = LIC_CAP.get(CENTER_ALIASES[canon])
+        return "" if val is None else val
+
     if canon in _CANON_TO_OFFICIAL:
-        return LIC_CAP[_CANON_TO_OFFICIAL[canon]]
+        val = LIC_CAP[_CANON_TO_OFFICIAL[canon]]
+        return "" if val is None else val
+
     best_key, best_len = None, 0
     for canon_k, off in _CANON_TO_OFFICIAL.items():
-        if canon_k in canon or canon in canon_k:
+        if canon_k and (canon_k in canon or canon in canon_k):
             if len(canon_k) > best_len:
                 best_key, best_len = off, len(canon_k)
-    return LIC_CAP.get(best_key) if best_key else None
+
+    val = LIC_CAP.get(best_key) if best_key else ""
+    return "" if val is None else val
 
 # ----------------------------
 # Helpers (parsing)
@@ -204,9 +295,12 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
-    header_row_idx = aa_df_raw.index[aa_df_raw.iloc[:, 0].astype(str).str.startswith("ST: Participant PID", na=False)]
+    header_row_idx = aa_df_raw.index[
+        aa_df_raw.iloc[:, 0].astype(str).str.startswith("ST: Participant PID", na=False)
+    ]
     if len(header_row_idx) == 0:
         raise ValueError("Could not find header row in Applied/Accepted report.")
+
     header_row_idx = int(header_row_idx[0])
     headers = aa_df_raw.iloc[header_row_idx].tolist()
     body = pd.DataFrame(aa_df_raw.iloc[header_row_idx + 1:].values, columns=headers)
@@ -214,9 +308,21 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
     center_col = "ST: Center Name"
     status_col = "ST: Status"
     date_col = "ST: Status End Date"
+    target_py_col = "APF: Target PY"
 
+    required_cols = [center_col, status_col, date_col, target_py_col]
+    missing_cols = [c for c in required_cols if c not in body.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required column(s) in Applied/Accepted report: {', '.join(missing_cols)}")
+
+    # Same original filter: only active rows with blank Status End Date.
     is_blank_date = body[date_col].isna() | body[date_col].astype(str).str.strip().eq("")
-    body = body[is_blank_date].copy()
+
+    # New required filter: only include 2026-2027 program year.
+    is_target_py = body[target_py_col].astype(str).str.strip().eq("2026-2027")
+
+    body = body[is_blank_date & is_target_py].copy()
+
     body[center_col] = (
         body[center_col]
         .astype(str)
@@ -361,7 +467,7 @@ def to_styled_excel(df: pd.DataFrame) -> bytes:
         ws.merge_range(0, 2, 0, last_col_0, "Hidalgo County Head Start Program", title_fmt)
         ws.merge_range(1, 2, 1, last_col_0, "", subtitle_fmt)
         ws.write_rich_string(1, 2,
-            subtitle_fmt, "Head Start - 2025-2026 Campus Classroom Enrollment as of ",
+            subtitle_fmt, "Head Start/EHS - 2026-2027 Campus Classroom Enrollment as of ",
             red_fmt, f"({date_str})",
             subtitle_fmt
         )
