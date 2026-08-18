@@ -1,4 +1,3 @@
-
 import io
 import re
 from pathlib import Path
@@ -208,7 +207,31 @@ def program_for(center_name, class_name="") -> str:
 
     return PROGRAM_HS
 
-def lic_cap_for(center_name: str):
+def _lic_cap_for_program(
+    value,
+    program_filter: str | None = None,
+    preserve_slash: bool = False,
+):
+    """
+    Keep the official slash value on agency/EHS views, but use the primary
+    licensing capacity on the Head Start-only view.
+
+    Garza is the one exception: because it serves both programs, its official
+    188/34 value is retained on both the Head Start and EHS sheets.
+    """
+    if value is None:
+        return ""
+    if (
+        program_filter == PROGRAM_HS
+        and isinstance(value, str)
+        and "/" in value
+        and not preserve_slash
+    ):
+        head_start_value = value.split("/", 1)[0].strip()
+        return int(head_start_value) if head_start_value.isdigit() else head_start_value
+    return value
+
+def lic_cap_for(center_name: str, program_filter: str | None = None):
     if not isinstance(center_name, str):
         return ""
 
@@ -217,21 +240,35 @@ def lic_cap_for(center_name: str):
     raw = re.sub(r"[^a-z0-9\s]", " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
 
-    # Check the most specific aliases first so, for example,
-    # "San Juan EHS Academy" does not get matched too early by "san juan".
-    for alias, official in sorted(CENTER_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
-        if alias in raw:
-            val = LIC_CAP.get(official)
-            return "" if val is None else val
+    # Campus names normally appear before district descriptors. Choose the
+    # earliest matching campus alias, using the longest alias only as a
+    # tiebreaker. This prevents examples such as:
+    #   Castro ... Edinburg ISD -> Edinburg
+    #   Munoz/Salinas ... Mission ISD -> Mission EHS
+    alias_matches = []
+    for alias, official in CENTER_ALIASES.items():
+        match = re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", raw)
+        if match:
+            alias_matches.append((match.start(), -len(alias), alias, official))
+
+    if alias_matches:
+        _, _, _, official = min(alias_matches)
+        val = LIC_CAP.get(official)
+        preserve_slash = official in {"garza", "garza ehs academy"}
+        return _lic_cap_for_program(val, program_filter, preserve_slash)
 
     canon = _canonicalize_center(center_name)
     if canon in CENTER_ALIASES:
-        val = LIC_CAP.get(CENTER_ALIASES[canon])
-        return "" if val is None else val
+        official = CENTER_ALIASES[canon]
+        val = LIC_CAP.get(official)
+        preserve_slash = official in {"garza", "garza ehs academy"}
+        return _lic_cap_for_program(val, program_filter, preserve_slash)
 
     if canon in _CANON_TO_OFFICIAL:
-        val = LIC_CAP[_CANON_TO_OFFICIAL[canon]]
-        return "" if val is None else val
+        official = _CANON_TO_OFFICIAL[canon]
+        val = LIC_CAP[official]
+        preserve_slash = official in {"garza", "garza ehs academy"}
+        return _lic_cap_for_program(val, program_filter, preserve_slash)
 
     best_key, best_len = None, 0
     for canon_k, off in _CANON_TO_OFFICIAL.items():
@@ -240,7 +277,8 @@ def lic_cap_for(center_name: str):
                 best_key, best_len = off, len(canon_k)
 
     val = LIC_CAP.get(best_key) if best_key else ""
-    return "" if val is None else val
+    preserve_slash = best_key in {"garza", "garza ehs academy"}
+    return _lic_cap_for_program(val, program_filter, preserve_slash)
 
 # ----------------------------
 # Helpers (parsing)
@@ -495,7 +533,7 @@ def build_output_table(
         rows.append({
             "Center": f"{center} Total",
             "Room#/Age/Lang": "",
-            "Lic Cap.": lic_cap_for(center),
+            "Lic Cap.": lic_cap_for(center, program_filter),
             "Funded": funded_sum,
             "Enrolled": enrolled_sum,
             "Applied": applied_val,
@@ -834,7 +872,7 @@ if process and vf_file and aa_file:
 
         sheet_specs = [
             {
-                "sheet_name": "Head Start Enrollment",
+                "sheet_name": "Agency Enrollment",
                 "subtitle": "Head Start/EHS",
                 "funded_target": FUNDED_TARGETS["All"],
                 "df": all_df,
