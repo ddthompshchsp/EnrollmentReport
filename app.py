@@ -438,30 +438,20 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
         .map(_norm_ws)
     )
 
-    # Use a classroom/room field when one is present. This is what allows the
-    # Garza Applied/Accepted records to follow the same Infant/Toddler split as
-    # the funded-enrollment report. If no such field exists, blank/non-matching
-    # Garza records follow the stated rule and remain Head Start.
-    room_col = None
-    preferred_room_cols = (
-        "ST: Classroom Name", "ST: Class Name", "ST: Classroom",
-        "ST: Class", "ST: Room Name", "ST: Room",
-    )
-    for candidate in preferred_room_cols:
-        if candidate in body.columns:
-            room_col = candidate
-            break
-    if room_col is None:
-        for col in body.columns:
-            col_text = str(col).lower()
-            if "classroom" in col_text or re.search(r"\broom\b", col_text):
-                room_col = col
-                break
+    # Garza is split by the participant's classroom/room text. Scan the full
+    # record instead of depending on one exact export header because the report
+    # may label that field as Classroom, Room, Group, Assignment, or similar.
+    # Any Garza record containing Infant or Toddler is EHS; all other Garza
+    # records are Head Start. Other centers are assigned from their center name.
+    def applied_accepted_program(row: pd.Series) -> str:
+        center_name = row[center_col]
+        if "garza" not in _plain_name(center_name):
+            return program_for(center_name, "")
 
-    if room_col is None:
-        body["Program"] = body[center_col].map(lambda c: program_for(c, ""))
-    else:
-        body["Program"] = body.apply(lambda r: program_for(r[center_col], r[room_col]), axis=1)
+        record_text = " ".join(_plain_name(value) for value in row.tolist())
+        return program_for(center_name, record_text)
+
+    body["Program"] = body.apply(applied_accepted_program, axis=1)
 
     counts = (
         body.groupby([center_col, "Program"])[status_col]
@@ -484,7 +474,6 @@ def parse_applied_accepted(aa_df_raw: pd.DataFrame) -> pd.DataFrame:
 def build_output_table(
     vf_tidy: pd.DataFrame,
     counts: pd.DataFrame,
-    funded_target: int,
     program_filter: str | None = None,
 ) -> pd.DataFrame:
     """Build the all-agency, Head Start-only, or EHS-only display table."""
@@ -515,8 +504,6 @@ def build_output_table(
     accepted_by_center = merged.groupby("Center")["Accepted"].max() if not merged.empty else pd.Series(dtype=float)
 
     rows = []
-    waitlist_total = 0
-
     for center, group in merged.groupby("Center", sort=True):
         funded_sum = int(group["Funded"].sum())
         enrolled_sum = int(group["Enrolled"].sum())
@@ -527,8 +514,6 @@ def build_output_table(
         # If Enrolled >= Funded, set Waitlist = Accepted.
         waitlist_val = accepted_val if funded_sum > 0 and enrolled_sum >= funded_sum else ""
         lacking_over = funded_sum - enrolled_sum
-        if waitlist_val != "":
-            waitlist_total += waitlist_val
 
         rows.append({
             "Center": f"{center} Total",
@@ -541,7 +526,6 @@ def build_output_table(
             "Lacking/Overage": lacking_over,
             "Waitlist": waitlist_val,
             "% Enrolled of Funded": pct_total,
-            "Comments": "",
         })
 
         # Class labels are preserved exactly as parsed.
@@ -557,34 +541,35 @@ def build_output_table(
                 "Lacking/Overage": "",
                 "Waitlist": "",
                 "% Enrolled of Funded": int(r["PctInt"]) if pd.notna(r["PctInt"]) else pd.NA,
-                "Comments": "",
             })
 
     center_rows = [r for r in rows if str(r["Center"]).endswith(" Total")]
+    agency_funded = sum(int(r["Funded"]) for r in center_rows)
     agency_enrolled = sum(int(r["Enrolled"]) for r in center_rows)
     agency_applied = sum(int(r["Applied"]) for r in center_rows)
     agency_accepted = sum(int(r["Accepted"]) for r in center_rows)
-    agency_pct = int(round(agency_enrolled / funded_target * 100, 0)) if funded_target > 0 else pd.NA
+    agency_lacking = sum(int(r["Lacking/Overage"]) for r in center_rows)
+    agency_waitlist = sum(int(r["Waitlist"]) for r in center_rows if r["Waitlist"] != "")
+    agency_pct = int(round(agency_enrolled / agency_funded * 100, 0)) if agency_funded > 0 else pd.NA
 
     rows.append({
         "Center": "Agency Total",
         "Room#/Age/Lang": "",
         "Lic Cap.": "",
-        "Funded": int(funded_target),
+        "Funded": agency_funded,
         "Enrolled": agency_enrolled,
         "Applied": agency_applied,
         "Accepted": agency_accepted,
-        "Lacking/Overage": int(funded_target) - agency_enrolled,
-        "Waitlist": waitlist_total,
+        "Lacking/Overage": agency_lacking,
+        "Waitlist": agency_waitlist,
         "% Enrolled of Funded": agency_pct,
-        "Comments": "",
     })
 
     final = pd.DataFrame(rows)
     return final[[
         "Center", "Room#/Age/Lang", "Lic Cap.", "Funded", "Enrolled",
         "Applied", "Accepted", "Lacking/Overage", "Waitlist",
-        "% Enrolled of Funded", "Comments",
+        "% Enrolled of Funded",
     ]]
 
 # ----------------------------
@@ -629,7 +614,6 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
             df = spec["df"]
             sheet_name = spec["sheet_name"]
             subtitle = spec["subtitle"]
-            funded_target = int(spec["funded_target"])
 
             df.to_excel(writer, index=False, sheet_name=sheet_name, startrow=3)
             ws = writer.sheets[sheet_name]
@@ -664,13 +648,13 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
             })
             border_all = wb.add_format({"border": 1})
             bold_row = wb.add_format({"bold": True})
-            comments_fmt = wb.add_format({
-                "border": 1,
-                "text_wrap": True,
-                "valign": "top",
-                "align": "left",
-            })
             agency_number_fmt = wb.add_format({"bold": True, "border": 1, "align": "center"})
+            agency_lacking_fmt = wb.add_format({
+                "bold": True,
+                "border": 1,
+                "align": "center",
+                "font_color": "#C00000",
+            })
             agency_pct_fmt = wb.add_format({
                 "bold": True,
                 "border": 1,
@@ -708,7 +692,6 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 "Lacking/Overage": 14,
                 "Waitlist": 12,
                 "% Enrolled of Funded": 16,
-                "Comments": 48,
             }
             for column_name, width in widths.items():
                 if column_name in df.columns:
@@ -726,16 +709,16 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 if isinstance(name, str) and name.endswith(" Total") and name != "Agency Total"
             ]
 
-            # Hidden helper values live only on classroom rows. They let Agency
-            # Total work whether the Center filter selects "Garza", searches
+            # Hidden helper values live on the first classroom row for each
+            # campus and mirror that campus's Total row. This lets Agency Total
+            # sum each campus once whether the filter selects "Garza", searches
             # for all Garza values, or selects only "Garza Total".
             helper_start_col = len(df.columns)
             helper_names = [
                 "_Dynamic Funded", "_Dynamic Enrolled", "_Dynamic Applied",
-                "_Dynamic Accepted", "_Dynamic Waitlist",
+                "_Dynamic Accepted", "_Dynamic Lacking", "_Dynamic Waitlist",
             ]
-            for helper_offset, helper_name in enumerate(helper_names):
-                ws.write(3, helper_start_col + helper_offset, helper_name)
+            for helper_offset in range(len(helper_names)):
                 ws.set_column(helper_start_col + helper_offset, helper_start_col + helper_offset, None, None, {"hidden": True})
             for data_index in range(agency_idx):
                 for helper_offset in range(len(helper_names)):
@@ -750,19 +733,19 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                     idx for idx in range(total_idx + 1, next_total_idx)
                     if str(df.loc[idx, "Room#/Age/Lang"]).strip()
                 ]
-                for class_idx in class_idxs:
-                    ws.write_number(4 + class_idx, helper_start_col, int(df.loc[class_idx, "Funded"]))
-                    ws.write_number(4 + class_idx, helper_start_col + 1, int(df.loc[class_idx, "Enrolled"]))
                 if class_idxs:
                     first_class_idx = class_idxs[0]
-                    ws.write_number(4 + first_class_idx, helper_start_col + 2, int(df.loc[total_idx, "Applied"]))
-                    ws.write_number(4 + first_class_idx, helper_start_col + 3, int(df.loc[total_idx, "Accepted"]))
-                    waitlist_value = df.loc[total_idx, "Waitlist"]
-                    ws.write_number(
-                        4 + first_class_idx,
-                        helper_start_col + 4,
-                        int(waitlist_value) if waitlist_value != "" else 0,
-                    )
+                    total_columns = [
+                        "Funded", "Enrolled", "Applied", "Accepted",
+                        "Lacking/Overage", "Waitlist",
+                    ]
+                    for helper_offset, total_column in enumerate(total_columns):
+                        total_value = df.loc[total_idx, total_column]
+                        ws.write_number(
+                            4 + first_class_idx,
+                            helper_start_col + helper_offset,
+                            int(total_value) if total_value != "" and pd.notna(total_value) else 0,
+                        )
 
             # Exclude Agency Total from the filter range so it remains visible.
             if data_end_ws_row >= 4:
@@ -790,15 +773,20 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 "format": wb.add_format({"num_format": '0"%"', "align": "center"}),
             })
 
+            lacking_idx = df.columns.get_loc("Lacking/Overage")
+            lacking_letter = idx_to_letter0(lacking_idx)
+            ws.conditional_format(f"{lacking_letter}5:{lacking_letter}{last_excel_row}", {
+                "type": "formula", "criteria": "TRUE",
+                "format": wb.add_format({"font_color": "#C00000"}),
+            })
+
             for row_index, center_name in enumerate(df["Center"].tolist()):
                 if isinstance(center_name, str) and center_name.endswith(" Total"):
                     ws.set_row(row_index + 4, None, bold_row)
 
-            # Keep the target when all schools are visible. When a filter hides
-            # rows, Funded and the other Agency Total values recalculate from
-            # only the visible center-total rows.
+            # Agency Total always sums campus Total values. When a filter hides
+            # rows, each metric recalculates from only the visible campuses.
             if data_end_excel >= 5:
-                no_filter_test = f'SUBTOTAL(103,$A$5:$A${data_end_excel})=COUNTA($A$5:$A${data_end_excel})'
                 class_count = visible_class_count_expression(data_end_excel)
                 helper_letters = [idx_to_letter0(helper_start_col + i) for i in range(len(helper_names))]
 
@@ -810,15 +798,12 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                         f'{center_total_sum})'
                     )
 
-                filtered_funded = filtered_total_formula("D", helper_letters[0])
-                funded_formula = (
-                    f'=IF({no_filter_test},{funded_target},'
-                    f'{filtered_funded[1:]})'
-                )
+                funded_formula = filtered_total_formula("D", helper_letters[0])
                 enrolled_formula = filtered_total_formula("E", helper_letters[1])
                 applied_formula = filtered_total_formula("F", helper_letters[2])
                 accepted_formula = filtered_total_formula("G", helper_letters[3])
-                waitlist_formula = filtered_total_formula("I", helper_letters[4])
+                lacking_formula = filtered_total_formula("H", helper_letters[4])
+                waitlist_formula = filtered_total_formula("I", helper_letters[5])
 
                 cached = df.loc[agency_idx]
                 ws.write_formula(agency_ws_row, 3, funded_formula, agency_number_fmt, int(cached["Funded"]))
@@ -828,8 +813,8 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 ws.write_formula(
                     agency_ws_row,
                     7,
-                    f"=D{agency_excel_row}-E{agency_excel_row}",
-                    agency_number_fmt,
+                    lacking_formula,
+                    agency_lacking_fmt,
                     int(cached["Lacking/Overage"]),
                 )
                 ws.write_formula(agency_ws_row, 8, waitlist_formula, agency_number_fmt, int(cached["Waitlist"]))
@@ -840,19 +825,6 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                     agency_pct_fmt,
                     int(cached["% Enrolled of Funded"]),
                 )
-
-            # Merge one Comments area for each center, preserving the existing layout.
-            comments_col_idx = df.columns.get_loc("Comments")
-            for group_index, start_idx in enumerate(center_total_idxs):
-                next_start = (
-                    center_total_idxs[group_index + 1]
-                    if group_index + 1 < len(center_total_idxs)
-                    else agency_idx
-                )
-                end_idx = next_start - 1
-                r0 = 4 + start_idx
-                r1 = max(r0, 4 + end_idx)
-                ws.merge_range(r0, comments_col_idx, r1, comments_col_idx, "", comments_fmt)
 
     return output.getvalue()
 
@@ -866,27 +838,24 @@ if process and vf_file and aa_file:
 
         vf_tidy = parse_vf(vf_raw)
         aa_counts = parse_applied_accepted(aa_raw)
-        all_df = build_output_table(vf_tidy, aa_counts, FUNDED_TARGETS["All"])
-        hs_df = build_output_table(vf_tidy, aa_counts, FUNDED_TARGETS[PROGRAM_HS], PROGRAM_HS)
-        ehs_df = build_output_table(vf_tidy, aa_counts, FUNDED_TARGETS[PROGRAM_EHS], PROGRAM_EHS)
+        all_df = build_output_table(vf_tidy, aa_counts)
+        hs_df = build_output_table(vf_tidy, aa_counts, PROGRAM_HS)
+        ehs_df = build_output_table(vf_tidy, aa_counts, PROGRAM_EHS)
 
         sheet_specs = [
             {
                 "sheet_name": "Agency Enrollment",
                 "subtitle": "Head Start/EHS",
-                "funded_target": FUNDED_TARGETS["All"],
                 "df": all_df,
             },
             {
                 "sheet_name": "Head Start Only",
                 "subtitle": "Head Start",
-                "funded_target": FUNDED_TARGETS[PROGRAM_HS],
                 "df": hs_df,
             },
             {
                 "sheet_name": "Early Head Start",
                 "subtitle": "Early Head Start",
-                "funded_target": FUNDED_TARGETS[PROGRAM_EHS],
                 "df": ehs_df,
             },
         ]
