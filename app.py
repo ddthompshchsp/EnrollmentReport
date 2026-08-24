@@ -587,28 +587,13 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
             n -= 1
         return letters
 
-    def visible_center_total_formula(column_letter: str, data_end_excel: int) -> str:
-        """Sum visible center-total rows only, excluding duplicated class rows."""
-        return (
-            f'=SUMPRODUCT(SUBTOTAL(109,OFFSET(${column_letter}$5,'
-            f'ROW(${column_letter}$5:${column_letter}${data_end_excel})-ROW(${column_letter}$5),0,1)),'
-            f'--(RIGHT($A$5:$A${data_end_excel},6)=" Total"))'
-        )
-
-    def visible_class_count_expression(data_end_excel: int) -> str:
-        """Count visible classroom rows so either common Center filter style works."""
-        return (
-            f'SUMPRODUCT(SUBTOTAL(103,OFFSET($B$5,'
-            f'ROW($B$5:$B${data_end_excel})-ROW($B$5),0,1)),'
-            f'--($B$5:$B${data_end_excel}<>""))'
-        )
-
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         wb = writer.book
         wb.set_calc_mode("auto")
         now_ct = datetime.now(ZoneInfo("America/Chicago"))
         date_str = now_ct.strftime("%m.%d.%y %I:%M %p CT")
+        calculation_rows = []
 
         for spec in sheet_specs:
             df = spec["df"]
@@ -653,7 +638,7 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 "bold": True,
                 "border": 1,
                 "align": "center",
-                "font_color": "#C00000",
+                "font_color": "#FF0000",
             })
             agency_pct_fmt = wb.add_format({
                 "bold": True,
@@ -709,20 +694,7 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 if isinstance(name, str) and name.endswith(" Total") and name != "Agency Total"
             ]
 
-            # Hidden helper values live on the first classroom row for each
-            # campus and mirror that campus's Total row. This lets Agency Total
-            # sum each campus once whether the filter selects "Garza", searches
-            # for all Garza values, or selects only "Garza Total".
-            helper_start_col = len(df.columns)
-            helper_names = [
-                "_Dynamic Funded", "_Dynamic Enrolled", "_Dynamic Applied",
-                "_Dynamic Accepted", "_Dynamic Lacking", "_Dynamic Waitlist",
-            ]
-            for helper_offset in range(len(helper_names)):
-                ws.set_column(helper_start_col + helper_offset, helper_start_col + helper_offset, None, None, {"hidden": True})
-            for data_index in range(agency_idx):
-                for helper_offset in range(len(helper_names)):
-                    ws.write_number(4 + data_index, helper_start_col + helper_offset, 0)
+            calculation_start_excel = len(calculation_rows) + 2
             for group_index, total_idx in enumerate(center_total_idxs):
                 next_total_idx = (
                     center_total_idxs[group_index + 1]
@@ -735,17 +707,23 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                 ]
                 if class_idxs:
                     first_class_idx = class_idxs[0]
-                    total_columns = [
-                        "Funded", "Enrolled", "Applied", "Accepted",
-                        "Lacking/Overage", "Waitlist",
-                    ]
-                    for helper_offset, total_column in enumerate(total_columns):
-                        total_value = df.loc[total_idx, total_column]
-                        ws.write_number(
-                            4 + first_class_idx,
-                            helper_start_col + helper_offset,
-                            int(total_value) if total_value != "" and pd.notna(total_value) else 0,
-                        )
+                    calculation_rows.append({
+                        "Sheet": sheet_name,
+                        "Campus": str(df.loc[total_idx, "Center"]).removesuffix(" Total"),
+                        "Total Excel Row": total_idx + 5,
+                        "First Class Excel Row": first_class_idx + 5,
+                        "Funded": int(df.loc[total_idx, "Funded"]),
+                        "Enrolled": int(df.loc[total_idx, "Enrolled"]),
+                        "Applied": int(df.loc[total_idx, "Applied"]),
+                        "Accepted": int(df.loc[total_idx, "Accepted"]),
+                        "Lacking": int(df.loc[total_idx, "Lacking/Overage"]),
+                        "Waitlist": (
+                            int(df.loc[total_idx, "Waitlist"])
+                            if df.loc[total_idx, "Waitlist"] != ""
+                            else 0
+                        ),
+                    })
+            calculation_end_excel = len(calculation_rows) + 1
 
             # Exclude Agency Total from the filter range so it remains visible.
             if data_end_ws_row >= 4:
@@ -777,33 +755,29 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
             lacking_letter = idx_to_letter0(lacking_idx)
             ws.conditional_format(f"{lacking_letter}5:{lacking_letter}{last_excel_row}", {
                 "type": "formula", "criteria": "TRUE",
-                "format": wb.add_format({"font_color": "#C00000"}),
+                "format": wb.add_format({"font_color": "#FF0000"}),
             })
 
             for row_index, center_name in enumerate(df["Center"].tolist()):
                 if isinstance(center_name, str) and center_name.endswith(" Total"):
                     ws.set_row(row_index + 4, None, bold_row)
 
-            # Agency Total always sums campus Total values. When a filter hides
-            # rows, each metric recalculates from only the visible campuses.
-            if data_end_excel >= 5:
-                class_count = visible_class_count_expression(data_end_excel)
-                helper_letters = [idx_to_letter0(helper_start_col + i) for i in range(len(helper_names))]
-
-                def filtered_total_formula(display_letter: str, helper_letter: str) -> str:
-                    center_total_sum = visible_center_total_formula(display_letter, data_end_excel)[1:]
+            # Agency Total sums the campus values stored on the hidden
+            # _Calculations sheet. Its Visible flag reacts to the campus filter.
+            if center_total_idxs:
+                def filtered_total_formula(calculation_column: str) -> str:
                     return (
-                        f'=IF({class_count}>0,'
-                        f'SUBTOTAL(109,${helper_letter}$5:${helper_letter}${data_end_excel}),'
-                        f'{center_total_sum})'
+                        f"=SUMPRODUCT('_Calculations'!$C${calculation_start_excel}:"
+                        f"$C${calculation_end_excel},'_Calculations'!${calculation_column}$"
+                        f"{calculation_start_excel}:${calculation_column}${calculation_end_excel})"
                     )
 
-                funded_formula = filtered_total_formula("D", helper_letters[0])
-                enrolled_formula = filtered_total_formula("E", helper_letters[1])
-                applied_formula = filtered_total_formula("F", helper_letters[2])
-                accepted_formula = filtered_total_formula("G", helper_letters[3])
-                lacking_formula = filtered_total_formula("H", helper_letters[4])
-                waitlist_formula = filtered_total_formula("I", helper_letters[5])
+                funded_formula = filtered_total_formula("D")
+                enrolled_formula = filtered_total_formula("E")
+                applied_formula = filtered_total_formula("F")
+                accepted_formula = filtered_total_formula("G")
+                lacking_formula = filtered_total_formula("H")
+                waitlist_formula = filtered_total_formula("I")
 
                 cached = df.loc[agency_idx]
                 ws.write_formula(agency_ws_row, 3, funded_formula, agency_number_fmt, int(cached["Funded"]))
@@ -825,6 +799,35 @@ def to_styled_excel(sheet_specs: list[dict]) -> bytes:
                     agency_pct_fmt,
                     int(cached["% Enrolled of Funded"]),
                 )
+
+        calculation_ws = wb.add_worksheet("_Calculations")
+        calculation_headers = [
+            "Report Sheet", "Campus", "Visible", "Funded", "Enrolled",
+            "Applied", "Accepted", "Lacking", "Waitlist",
+            "Campus Total Row", "First Classroom Row",
+        ]
+        calculation_ws.write_row(0, 0, calculation_headers)
+        for calculation_index, calculation_row in enumerate(calculation_rows, start=1):
+            calculation_ws.write(calculation_index, 0, calculation_row["Sheet"])
+            calculation_ws.write(calculation_index, 1, calculation_row["Campus"])
+            formula_sheet_name = calculation_row["Sheet"].replace("'", "''")
+            visibility_formula = (
+                f"=--((SUBTOTAL(103,'{formula_sheet_name}'!$A$"
+                f"{calculation_row['Total Excel Row']})+SUBTOTAL(103,'{formula_sheet_name}'!$B$"
+                f"{calculation_row['First Class Excel Row']}))>0)"
+            )
+            calculation_ws.write_formula(calculation_index, 2, visibility_formula, None, 1)
+            calculation_ws.write_row(calculation_index, 3, [
+                calculation_row["Funded"],
+                calculation_row["Enrolled"],
+                calculation_row["Applied"],
+                calculation_row["Accepted"],
+                calculation_row["Lacking"],
+                calculation_row["Waitlist"],
+                calculation_row["Total Excel Row"],
+                calculation_row["First Class Excel Row"],
+            ])
+        calculation_ws.hide()
 
     return output.getvalue()
 
