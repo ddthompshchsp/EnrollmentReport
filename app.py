@@ -322,6 +322,7 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
     Rules:
     - Keep 'Class X' exactly as 'Class X'
     - Keep 'Home Based 01' exactly as 'Home Based 01'
+    - Keep temporary/default classroom names exactly as imported
     - Do NOT auto-add 'Class' to Home Based
     - Class names may repeat across centers (allowed)
     """
@@ -336,6 +337,15 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
 
     # Matches: "Home Based 01", "Home  Based   001 (EHS)"
     re_home_based = re.compile(r"^\s*(Home\s*Based\s*0*\d+\b.*)$", re.I)
+
+    # Temporary classroom names in the source report do not always begin with
+    # "Class". Examples include "Temp", "TEMP 1", "Temporary A", and
+    # "Default Class". Recognize them as classroom headers and retain the
+    # imported label instead of leaving the preceding classroom active.
+    re_temp_or_default = re.compile(
+        r"^\s*((?:temp(?:orary)?|default)(?:(?:\b|(?=\d)).*)?)\s*$",
+        re.I,
+    )
 
     for i in range(len(vf_df_raw)):
         row = vf_df_raw.iloc[i, :]
@@ -382,6 +392,13 @@ def parse_vf(vf_df_raw: pd.DataFrame) -> pd.DataFrame:
         m_home = re_home_based.match(first)
         if m_home:
             current_class = _norm_ws(m_home.group(1))   # keeps "Home Based 01"
+            continue
+
+        m_temp_or_default = re_temp_or_default.match(first)
+        if m_temp_or_default:
+            # Preserve the source name/capitalization; only normalize excess
+            # whitespace so the Excel output remains clean.
+            current_class = _norm_ws(m_temp_or_default.group(1))
             continue
 
     tidy = pd.DataFrame(records)
