@@ -61,7 +61,7 @@ LIC_CAP = {
     "edinburg north": 147,
     "escandon": 109,
     "farias": 132,
-    "guerra": 144,
+    "guerra": 176,
     "guzman": 373,
     "longoria": 151,
     "mercedes": 182,
